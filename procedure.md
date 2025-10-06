@@ -62,7 +62,7 @@
 
 - [ ] Baseline 复现  
   - 下载 DUSt3R 源码  
-  - 跑通 demo，保存可视化结果 → `baseline_demo_output/`
+  - 跑通 demo，保存可视化结果 → `baseline_demo_output/完成
 
 - [ ] 输出文件：
   - `requirements.txt`
