@@ -1,0 +1,67 @@
+# == Q-only（量化）============================================================
+# 目的：在端侧显著降低延时/体积/显存；先 PTQ，不达标转 QAT；含 keep-list（LN/Softmax/Attn）
+# 注：导出 ONNX（静态 512^2），按 TensorRT 静态 profile 构建 engine；统一写日志字段
+
+run:
+  exp_name: "Q_only_int8_ptq_qat"
+  seed: 42
+  mode: "auto" # "ptq"|"qat"|"auto"（建议 auto）
+  qat_max_epochs: 15
+  early_stop_patience: 3
+
+paths:
+  checkpoints: "checkpoints/"
+  outputs: "outputs/"
+  logs: "logs/"
+  datasets: "datasets/"
+
+model:
+  weights_fp32: "outputs/student_fp32_best.pth" # 若接 K→Q，替换为蒸馏最佳 Student
+  export_onnx: true
+  onnx_opset: 17
+  onnx_input_name: "images" # 导出 ONNX 的输入节点名，供 TRT profile 绑定
+
+quant:
+  scheme: "W8A8"
+  weight:
+    granularity: "per-channel"
+    symmetric: true
+  activation:
+    granularity: "per-tensor"
+    symmetric: false
+  # —— 关键：保持注意力数值稳定 & TRT 融合可用 —— #
+  keep_list_ops: [ LayerNorm, Softmax, Scale, MatMul_QK, Div_Sqrt_d ]
+  keep_list_modules: [ "encoder.*.ln*", "encoder.*.attn.softmax", "decoder.*.ln*" ]
+
+  calibration:
+    list: "datasets/calib_512.lst" # ≥512 张更稳
+    num_images: 512
+    preprocess: { resize: 512, center_crop: 512, normalize: "imagenet" }
+    shuffle: false
+
+  qat:
+    lr: 1e-4
+    distill_kd_beta: 0.2 # QAT 引入轻量 KD 稳定分布（可关）
+    freeze_keep_list: true
+
+tensorrt:
+  build:
+    static_shape: true
+    max_workspace_GB: 8
+  input_name: "images"
+  profiles:
+  - { images: [ 1, 3, 512, 512 ] } # 主口径；如需 384/640，另开单点复测
+  export_engine: "outputs/student_int8.trt"
+
+metrics:
+  primary: "t_pair_p50_ms" # 端上效率为主
+  tolerances:
+    acc_drop_pct_max: 1.0 # 相对 reference（eval.yaml）跌幅 ≤1%
+    speedup_vs_fp32_target: 2.0 # 目标 ≥2.0x（等价 t_pair ↓50%）
+
+budget:
+  gpu_hours_soft: 20
+  stop_if_exceed: true
+
+logging:
+  out_dir: "logs/quant"

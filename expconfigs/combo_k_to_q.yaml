@@ -1,0 +1,24 @@
+# == 组合：K → Q（主线）======================================================
+# 目的：先蒸馏得到 FP32 学生，再做 QAT（保 keep-list），是最稳交付管线
+# 机制：脚本层按“分层合并”读取 distill.yaml 与 quant.yaml，再以本文件 override
+
+inherit:
+- "configs/distill.yaml"
+- "configs/quant.yaml"
+
+run:
+  exp_name: "K_to_Q_mainline"
+
+model_bridge:
+  student_from_distill_ckpt: "outputs/K_only_student_v1/best.pth"
+  use_for_quant: true
+
+# 量化策略沿用 quant.yaml，仅在此重申关键口径，确保 keep-list 与 Student 对齐
+quant:
+  mode: "auto"
+  keep_list_ops: [ LayerNorm, Softmax, Scale, MatMul_QK, Div_Sqrt_d ]
+  keep_list_modules: [ "encoder.*.ln*", "encoder.*.attn.softmax", "decoder.*.ln*" ]
+
+budget:
+  gpu_hours_soft: 60 # 蒸馏+QAT 的合计软预算（脚本滚动累积）
+  stop_if_exceed: true

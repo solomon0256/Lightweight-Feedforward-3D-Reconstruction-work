@@ -1,0 +1,54 @@
+# == P-only（结构化剪枝）=====================================================
+# 目的：用可部署的结构化剪枝（通道/头/FFN 维度）降低 FLOPs/Params；依赖图保证拓扑一致
+# 说明：只做两档 ρ=0.1 / 0.3；每档有对应微调时长；可选择剪 Teacher 或 Student
+
+run:
+  exp_name: "P_only_structured_prune"
+  seed: 42
+
+paths:
+  checkpoints: "checkpoints/"
+  outputs: "outputs/"
+  logs: "logs/"
+  datasets: "datasets/"
+
+model:
+  weights: "outputs/student_fp32_best.pth" # 推荐在学生上剪，更易恢复；也可换 Teacher
+  depgraph: true # 启用依赖图/对齐组（残差/concat/qkv 等）
+
+prune:
+  target:
+    encoder_mha_heads: true
+    encoder_ffn_hidden: true
+    decoder_ffn_hidden: true
+  criterion: "L1" # 通道/头重要性度量（L1/L2/敏感度）
+  granularity: "structured" # 必须结构化，便于部署
+  do_not_prune:
+  # 明确不剪的模块（数值稳定/位置编码）
+  - ".*LayerNorm.*"
+  - ".*pos_embed.*"
+  - ".*first_conv.*"
+  align_groups: [ "residual", "concat", "mha_qkv" ] # 同组同剪，保证维度对齐
+  ratio_candidates:
+  - { rho: 0.1, finetune_epochs: 12 }
+  - { rho: 0.3, finetune_epochs: 15 }
+
+finetune:
+  enable: true
+  lr: 1.5e-4
+  sched: "cosine"
+  weight_decay: 0.01
+  distill_aid: false # P→K 时再开蒸馏补偿
+
+metrics:
+  primary: "params_M"
+  tolerances:
+    acc_drop_pct_max: 3.0 # 结构化剪枝容许更宽的精度跌幅
+    size_reduction_min_pct: 25.0
+
+budget:
+  gpu_hours_soft: 30
+  stop_if_exceed: true
+
+logging:
+  out_dir: "logs/prune"
