@@ -1,0 +1,66 @@
+# == Joint PQK（一体化训练）===================================================
+# 目的：在同一训练中联合：任务损失 + 蒸馏 + 量化感知 + 稀疏正则；周期中后段启用QAT与结构化截断
+# 特点：工程创新，流程更短；需注意稳定性（早停 & 分段启用）
+
+run:
+  exp_name: "Joint_PQK_onepass"
+  seed: 42
+  max_epochs: 35
+  early_stop_patience: 4
+
+paths:
+  checkpoints: "checkpoints/"
+  outputs: "outputs/"
+  logs: "logs/"
+  datasets: "datasets/"
+
+data:
+  train_set: "datasets/train_pairs.lst"
+  val_set: "datasets/val_pairs.lst"
+  num_workers: 8
+  batch_size: 1
+
+teacher:
+  weights: "checkpoints/DUSt3R_teacher.safetensors"
+  eval_fp16: true
+
+student:
+  arch: "dust3r_student_m"
+  student_config:
+    encoder_layers: 11
+    mha_heads_ratio: 0.85
+    ffn_ratio: 0.85
+
+joint_objectives:
+  task_alpha: 1.0
+  kd_beta: 0.5
+  kd_temperature: 3
+  qat_enable_epoch: 0.6 # 训练进度到 60% 时开启 QAT
+  sparse_l1_lambda: 1e-6 # 轻量结构化稀疏正则
+  prune_step_every: 4 # 每 4 epoch 做一次结构化截断（与 depgraph 对齐）
+  keep_list_ops: [ LayerNorm, Softmax, Scale, MatMul_QK, Div_Sqrt_d ]
+  keep_list_modules: [ "encoder.*.ln*", "encoder.*.attn.softmax", "decoder.*.ln*" ]
+
+quant:
+  scheme: "W8A8"
+  weight: { granularity: "per-channel", symmetric: true }
+  activation: { granularity: "per-tensor", symmetric: false }
+
+optim:
+  lr: 2e-4
+  sched: "cosine"
+  weight_decay: 0.01
+  grad_clip: 1.0
+
+metrics:
+  primary: "chamfer"
+  tolerances:
+    acc_drop_pct_max: 1.0
+    speedup_vs_fp32_target: 2.0
+
+budget:
+  gpu_hours_soft: 40
+  stop_if_exceed: true
+
+logging:
+  out_dir: "logs/joint"

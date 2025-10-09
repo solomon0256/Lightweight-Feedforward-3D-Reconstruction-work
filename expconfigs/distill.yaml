@@ -1,0 +1,64 @@
+# == K-only（蒸馏）============================================================
+# 目的：训练一个轻量 Student（FP32），精度逼近 Teacher，为后续 QAT 提供稳定分布
+# 依赖：读取全局 workload.yaml / eval.yaml，写统一日志字段（CSV/JSON）
+# 重要：KD/FD 的键名统一在 distill.* 下；Student 缩放显式可控；日志字段必须齐全
+
+run:
+  exp_name: "K_only_student_v1" # 日志/模型输出目录名的一部分
+  seed: 42
+  max_epochs: 30
+  early_stop_patience: 3 # 连续 N 次 val 无提升即早停
+  ckpt_interval: 1 # 每 N epoch 保存一次
+
+paths:
+  # 推荐由脚本合并 paths.yaml，这里提供兜底
+  checkpoints: "checkpoints/"
+  outputs: "outputs/"
+  logs: "logs/"
+  datasets: "datasets/"
+
+data:
+  train_set: "datasets/train_pairs.lst" # 固定 pair-graph 列表（与 workload.yaml 一致）
+  val_set: "datasets/val_pairs.lst"
+  num_workers: 8
+  batch_size: 1 # DUSt3R 类任务以 pair 为粒度，按统一口径 BS=1
+
+teacher:
+  weights: "checkpoints/DUSt3R_teacher.safetensors"
+  eval_fp16: true # 推理半精度以提速（不影响作为蒸馏“老师”的目标）
+
+student:
+  # 解析规则：脚本根据 arch 或 student_config 构建 Student
+  arch: "dust3r_student_s" # 可用 _s/_m 等预设；或改用 student_config
+  student_config:
+    # 若 arch 无法解析，用这个结构直配（二选一）
+    encoder_layers: 10 # 例如从 12 降到 10
+    mha_heads_ratio: 0.8 # 注意力头缩放比例
+    ffn_ratio: 0.8 # FFN 宽度缩放比例
+  init_from_pruned: false # 若想用 P(ρ=0.1) 结果作为 student 初始，改成 true
+
+distill:
+  enable: true
+  kd_temperature: [ 3, 5 ] # KL 温度候选
+  beta_kd: [ 0.5, 0.7 ] # KL 权重候选（后期可提高）
+  gamma_fd: [ 0.0, 0.1 ] # Feature Distill 权重（无显式 logits 时尤为重要）
+  curriculum_pct_task_first: 0.7 # 课程式蒸馏：前 70% 以任务损失为主，后 30% 提升 KD
+
+optim:
+  lr: 2e-4
+  weight_decay: 0.01
+  sched: "cosine"
+  grad_clip: 1.0
+
+metrics:
+  # 与 eval.yaml 对齐：统一口径由 eval.yaml 决定，这里仅指向 primary_metric 名称
+  primary: "chamfer"
+  tolerances:
+    acc_drop_pct_max: 1.0 # 相对 reference 的最大可接受跌幅（reference 见 eval.yaml）
+
+budget:
+  gpu_hours_soft: 48 # 软预算（脚本滚动估计，超出可触发早停）
+  stop_if_exceed: true
+
+logging:
+  out_dir: "logs/distill" # 统一日志目录；字段需写满统一 schema

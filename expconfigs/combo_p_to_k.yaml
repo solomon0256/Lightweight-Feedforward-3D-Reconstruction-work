@@ -1,0 +1,31 @@
+# == 组合：P → K（剪后短蒸馏）================================================
+# 目的：先做温和结构化剪枝（ρ=0.1），再进行短蒸馏 10–15 epoch，恢复精度并稳分布
+# 机制：脚本合并 prune.yaml + distill.yaml，并由本文件进行最小覆盖
+
+inherit:
+- "configs/prune.yaml"
+- "configs/distill.yaml"
+
+run:
+  exp_name: "P_to_K_short_distill"
+
+prune:
+  ratio_candidates:
+  - { rho: 0.1, finetune_epochs: 8 } # 剪后仅短微调
+
+distill:
+  enable: true
+  resume_from: "outputs/P_only_structured_prune/rho_0.1.pth" # 用剪后权重作为蒸馏起点
+  kd_temperature: [ 3 ]
+  beta_kd: [ 0.5 ]
+  gamma_fd: [ 0.0 ]
+  curriculum_pct_task_first: 0.7
+  # 全程缩短到 15 epoch 内（脚本读取 run.max_epochs 覆盖，否则用默认 30）
+
+run_overrides:
+  max_epochs: 15
+  early_stop_patience: 3
+
+budget:
+  gpu_hours_soft: 40
+  stop_if_exceed: true
