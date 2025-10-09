@@ -1,0 +1,55 @@
+# ------------------------------------------------------------
+# DUSt3R_PQK / configs/eval.yaml
+# 作用：统一“评测与阈值口径”，定义质量/效率/资源指标、成功线、早停与报告输出
+# ------------------------------------------------------------
+
+metrics:
+  quality:
+  - name: "chamfer" # 场景/对图平均的几何误差（或任务主指标之一）
+  - name: "absrel" # 相对误差（常用于深度/几何类任务）
+  - name: "rmse" # 均方根误差
+  - name: "delta1" # 阈值正确率（如 δ<1.25）
+  - name: "reproj_px" # 重投影像素误差（像素）
+  efficiency:
+  - name: "t_pair_p50_ms" # 单 pair 端到端时延：p50（毫秒）
+  - name: "t_pair_p95_ms" # 单 pair 端到端时延：p95（尾延迟）
+  - name: "t_scene_s" # 按固定 pair_graph 跑完整个场景耗时（秒）
+  - name: "pairs_per_sec" # 吞吐（pair/s）
+  resources:
+  - name: "params_M" # 参数量（百万）
+  - name: "flops_G" # 计算量（GFLOPs，静态 512x512 口径）
+  - name: "size_MB" # 模型体积（MB）
+  - name: "vram_GB" # 峰值显存（GB，评测时统计）
+
+thresholds:
+  # 成功/止损口径（可在具体任务卡覆盖）
+  # 与 Teacher 相比允许的精度跌幅（%）
+  quality_drop_main_pct: 1.5
+  # 仅量化单独节点（Q-only）允许稍大的跌幅
+  quality_drop_q_only_pct: 2.0
+  # 与学生 FP32 相比，端侧时延需要的加速比例（%）
+  speedup_pair_p50_pct: 50
+  speedup_pair_p95_pct: 35
+
+early_stop:
+  # 统一早停规则（可在具体实验覆盖）
+  no_improve_ckpt: 3 # 连续 N 个 ckpt 指标无改进则停止
+  max_epoch:
+    distill: 30 # 蒸馏最大 epoch
+    qat: 20 # 量化感知训练最大 epoch
+    prune_ft: 20 # 剪枝后微调最大 epoch
+
+report:
+  # 报告输出
+  export_table: "reports/result_table.xlsx"
+  plots_dir: "reports/plots/"
+  # 可选导出：CSV/JSON 汇总
+  export_csv: "reports/summary.csv"
+  export_json: "reports/summary.json"
+
+# 评测脚本实现时的统计口径建议（便于统一）
+aggregation:
+  per_pair: [ "t_pair_ms", "reproj_px" ] # 原始对图级别度量（脚本内部统计）
+  per_scene_reduce: "mean" # 对图 -> 场景：均值
+  global_reduce: "mean" # 场景 -> 全局：均值
+  percentiles: [ 50, 95 ] # 延迟的分位数口径
