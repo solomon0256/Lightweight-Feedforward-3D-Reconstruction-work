@@ -1,63 +1,65 @@
 {
   "required": [
-    "exp_id","combo","seed","dataset_id","split",
-    "params_M","flops_G","size_MB","vram_GB",
-    "chamfer","absrel","rmse","delta1","reproj_px",
-    "t_pair_p50_ms","t_pair_p95_ms","t_scene_s","pairs_per_sec",
-    "gpu_hours","commit_hash","datetime"
+    "exp_id", "combo", "seed",
+    "dataset_id", "split",
+    "params_M", "flops_G", "size_MB", "vram_GB",
+    "chamfer", "absrel", "rmse", "delta1", "reproj_px",
+    "t_pair_p50_ms", "t_pair_p95_ms", "t_scene_s", "pairs_per_sec",
+    "gpu_hours", "commit_hash", "datetime"
   ],
   "properties": {
-    "exp_id": {"type":"string"},
-    "combo":  {"type":"string"},  
-    "rho":    {"type":["number","null"]},
-    "T":      {"type":["number","null"]},
-    "beta":   {"type":["number","null"]},
-    "gamma":  {"type":["number","null"]},
-    "bits_w": {"type":["integer","null"]},
-    "bits_a": {"type":["integer","null"]},
-    "keep_list": {"type":["string","null"]},
+    "exp_id": { "type": "string" },
+    "combo":  { "type": "string" },
+    "rho":    { "type": ["number", "null"] },
+    "T":      { "type": ["number", "null"] },
+    "beta":   { "type": ["number", "null"] },
+    "gamma":  { "type": ["number", "null"] },
+    "bits_w": { "type": ["integer", "null"] },
+    "bits_a": { "type": ["integer", "null"] },
+    "keep_list": { "type": ["string", "null"] },
 
-    "params_M":{"type":"number"},
-    "flops_G": {"type":"number"},
-    "size_MB": {"type":"number"},
-    "vram_GB": {"type":"number"},
+    "params_M": { "type": "number" },
+    "flops_G":  { "type": "number" },
+    "size_MB":  { "type": "number" },
+    "vram_GB":  { "type": "number" },
 
-    "chamfer":{"type":"number"},
-    "absrel":{"type":"number"},
-    "rmse":{"type":"number"},
-    "delta1":{"type":"number"},
-    "reproj_px":{"type":"number"},
+    "chamfer":  { "type": "number" },
+    "absrel":   { "type": "number" },
+    "rmse":     { "type": "number" },
+    "delta1":   { "type": "number" },
+    "reproj_px":{ "type": "number" },
 
-    "t_pair_p50_ms":{"type":"number"},
-    "t_pair_p95_ms":{"type":"number"},
-    "t_scene_s":{"type":"number"},
-    "pairs_per_sec":{"type":"number"},
+    "t_pair_p50_ms": { "type": "number" },
+    "t_pair_p95_ms": { "type": "number" },
+    "t_scene_s":     { "type": "number" },
+    "pairs_per_sec": { "type": "number" },
 
-    "edge_device":{"type":["object","null"],
-      "properties":{
-        "model":{"type":"string"},
-        "soc":{"type":"string"},
-        "ram":{"type":"string"},
-        "power_avg_W":{"type":["number","null"]},
-        "power_peak_W":{"type":["number","null"]},
-        "throttle":{"type":["boolean","null"]}
+    "edge_device": {
+      "type": ["object", "null"],
+      "properties": {
+        "model": { "type": "string" },
+        "soc":   { "type": "string" },
+        "ram":   { "type": "string" },
+        "power_avg_W":  { "type": ["number", "null"] },
+        "power_peak_W": { "type": ["number", "null"] },
+        "throttle":     { "type": ["boolean", "null"] }
       }
     },
 
-    "dataset_id":{"type":"string"},
-    "split":{"type":"string"},
-    "num_pairs":{"type":["integer","null"]},
-    "calibration_set_hash":{"type":["string","null"]},
+    "dataset_id": { "type": "string" },
+    "split":      { "type": "string" },
+    "num_pairs":  { "type": ["integer", "null"] },
+    "calibration_set_hash": { "type": ["string", "null"] },
 
-    "pytorch_ver":{"type":["string","null"]},
-    "cuda_ver":{"type":["string","null"]},
-    "tensorrt_ver":{"type":["string","null"]},
-    "modelopt_ver":{"type":["string","null"]},
-    "commit_hash":{"type":"string"},
+    "pytorch_ver":  { "type": ["string", "null"] },
+    "cuda_ver":     { "type": ["string", "null"] },
+    "tensorrt_ver": { "type": ["string", "null"] },
+    "modelopt_ver": { "type": ["string", "null"] },
+    "commit_hash":  { "type": "string" },
 
-    "notes":{"type":["string","null"]},
-    "gpu_hours":{"type":"number"},
-    "seed":{"type":"integer"},
-    "datetime":{"type":"string","description":"ISO8601"}
+    "notes":     { "type": ["string", "null"] },
+    "gpu_hours": { "type": "number" },
+    "seed":      { "type": "integer" },
+    "datetime":  { "type": "string" }
   }
 }
