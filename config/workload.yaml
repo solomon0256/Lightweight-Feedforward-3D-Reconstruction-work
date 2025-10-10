@@ -12,7 +12,7 @@ device: "cuda" # 可改为 "cpu" 做快速校验
 
 # 统一输入口径（静态 shape 有利于 TensorRT/TVM 等编译优化）
 input:
-  shape: [ 1, 3, 512, 512 ] # [batch, channels, height, width]；DUSt3R 按对推理，BS 保持 1
+  shape: [ 1, 3, 512, 384 ] # [batch, channels, height, width]；DUSt3R 按对推理，BS 保持 1
   static_shape: true # 导出 ONNX / TensorRT 时生效
   dtype: "float32" # 训练/蒸馏保持 FP32；量化阶段由 quant.yaml 决定
 

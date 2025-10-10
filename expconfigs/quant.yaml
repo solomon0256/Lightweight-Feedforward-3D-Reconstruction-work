@@ -36,7 +36,7 @@ quant:
   calibration:
     list: "datasets/calib_512.lst" # ≥512 张更稳
     num_images: 512
-    preprocess: { resize: 512, center_crop: 512, normalize: "imagenet" }
+    preprocess: { resize: 512, center_crop: 384, normalize: "imagenet" }
     shuffle: false
 
   qat:
