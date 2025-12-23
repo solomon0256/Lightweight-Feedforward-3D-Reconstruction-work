@@ -1,0 +1,51 @@
+# DUSt3R-PQK Conda 环境配置
+#
+# 用法 (在云服务器上):
+#   conda env create -f environment.yml
+#   conda activate dust3r-pqk
+#
+# 注意: 根据实际 CUDA 版本修改 pytorch-cuda 版本
+
+name: dust3r-pqk
+
+channels:
+- pytorch
+- nvidia
+- conda-forge
+- defaults
+
+dependencies:
+# Python 版本 (DUSt3R 官方推荐 3.11)
+- python=3.11
+- cmake=3.14.0
+
+# PyTorch (根据 CUDA 版本修改)
+# 选项: pytorch-cuda=12.1 / 12.4 / 11.8
+- pytorch
+- torchvision
+- pytorch-cuda=12.1
+
+# 基础科学计算
+- numpy
+- scipy
+- matplotlib
+
+# pip 安装的包
+- pip
+- pip:
+  # DUSt3R 核心依赖
+  - roma
+  - gradio
+  - tqdm
+  - opencv-python
+  - einops
+  - trimesh
+  - tensorboard
+  - "pyglet<2"
+  - "huggingface-hub[torch]>=0.22"
+
+  # 实验平台
+  - pyyaml
+  # 量化工具 (可选)
+  # - onnx
+  # - onnxruntime-gpu

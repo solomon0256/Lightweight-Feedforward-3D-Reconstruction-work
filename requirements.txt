@@ -1,0 +1,53 @@
+# DUSt3R-PQK 实验环境依赖
+# 
+# 用法 (在云服务器上):
+#   pip install -r requirements.txt
+#
+# 注意: PyTorch 需要根据 CUDA 版本单独安装
+# 参考: https://pytorch.org/get-started/locally/
+
+# ==== 核心依赖 (DUSt3R 官方) ====
+# torch          # 单独安装，见下方说明
+# torchvision    # 单独安装，见下方说明
+roma
+gradio
+matplotlib
+tqdm
+opencv-python
+scipy
+einops
+trimesh
+tensorboard
+pyglet<2
+huggingface-hub[torch]>=0.22
+
+# ==== 实验平台依赖 ====
+numpy
+pyyaml
+
+# ==== 量化相关 (可选) ====
+# onnx
+# onnxruntime
+# nvidia-modelopt  # TensorRT 量化，需要 NVIDIA 账号
+
+# ==== 开发工具 ====
+# pytest         # 单元测试
+# black          # 代码格式化
+# flake8         # 代码检查
+
+
+# ============================================
+# PyTorch 安装说明 (根据 CUDA 版本选择)
+# ============================================
+#
+# CUDA 12.1:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#
+# CUDA 12.4:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#
+# CUDA 11.8:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#
+# CPU only:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
