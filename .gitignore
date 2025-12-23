@@ -1,0 +1,79 @@
+# ===========================================
+# DUSt3R-PQK .gitignore
+# ===========================================
+
+# ============ 模型权重（太大，不上传）============
+checkpoints/*.pth
+checkpoints/*.safetensors
+checkpoints/*.pt
+checkpoints/*.bin
+checkpoints/*.onnx
+checkpoints/*.trt
+checkpoints/*.engine
+
+# ============ 第三方代码 ============
+# dust3r 作为 git submodule 管理，不在 .gitignore 中排除
+# croco 是 dust3r 的 submodule，同样会被 git 管理
+
+# HuggingFace 缓存（模型权重缓存位置）
+.cache/
+**/huggingface/
+
+# ============ 数据集 ============
+datasets/
+data/
+
+# ============ 输出文件 ============
+outputs/
+logs/*.json
+logs/*.csv
+reports/*.xlsx
+reports/plots/
+
+# ============ Python ============
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ============ 虚拟环境 ============
+.venv/
+venv/
+ENV/
+env/
+
+# ============ IDE ============
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ============ 系统文件 ============
+.DS_Store
+Thumbs.db
+
+# ============ Jupyter ============
+.ipynb_checkpoints/
+*.ipynb
+
+# ============ 临时文件 ============
+*.tmp
+*.temp
+*.log

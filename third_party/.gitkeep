@@ -1,0 +1,4 @@
+# 此目录用于存放第三方代码（如 DUSt3R）
+# 在云服务器上运行 scripts/setup_dust3r.sh 会克隆到这里
+
+# DUSt3R 官方仓库会被克隆到: third_party/dust3r/
