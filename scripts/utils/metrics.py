@@ -41,13 +41,25 @@ def chamfer_distance(
     计算 Chamfer Distance
     
     Args:
-        pred_points: 预测点云 (N, 3) 或 (B, N, 3)
-        gt_points: GT 点云 (M, 3) 或 (B, M, 3)
+        pred_points: 预测点云 (N, 3) 或 (B, N, 3) 或 (B, 3, H, W)
+        gt_points: GT 点云 (M, 3) 或 (B, M, 3) 或 (B, 3, H, W)
         reduce: 'mean' / 'sum' / 'none'
     
     Returns:
         Chamfer distance
     """
+    # 处理图像格式 (B, C, H, W) -> (B, N, 3)
+    if pred_points.dim() == 4:
+        B, C, H, W = pred_points.shape
+        pred_points = pred_points.permute(0, 2, 3, 1).reshape(B, H * W, C)
+        if C != 3:
+            pred_points = pred_points[:, :, :3]  # 只取前3个通道
+    if gt_points.dim() == 4:
+        B, C, H, W = gt_points.shape
+        gt_points = gt_points.permute(0, 2, 3, 1).reshape(B, H * W, C)
+        if C != 3:
+            gt_points = gt_points[:, :, :3]
+    
     # 确保 batch 维度
     if pred_points.dim() == 2:
         pred_points = pred_points.unsqueeze(0)
@@ -55,6 +67,17 @@ def chamfer_distance(
     
     B, N, _ = pred_points.shape
     _, M, _ = gt_points.shape
+    
+    # 采样以节省显存（如果点数太多）
+    max_points = 4096
+    if N > max_points:
+        idx = torch.randperm(N, device=pred_points.device)[:max_points]
+        pred_points = pred_points[:, idx, :]
+        N = max_points
+    if M > max_points:
+        idx = torch.randperm(M, device=gt_points.device)[:max_points]
+        gt_points = gt_points[:, idx, :]
+        M = max_points
     
     # 计算两两距离
     # pred: (B, N, 1, 3), gt: (B, 1, M, 3)
