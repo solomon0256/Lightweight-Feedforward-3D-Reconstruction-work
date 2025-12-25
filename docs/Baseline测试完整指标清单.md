@@ -352,73 +352,330 @@
 
 ---
 
-## 十、Checklist（测试前检查）
+## 十三、训练过程记录（蒸馏/剪枝/量化时）
 
-### 环境准备
-- [ ] GPU 型号固定，后续所有实验用同一台
-- [ ] 输入分辨率、batch size、pair_graph 固定
-- [ ] 随机种子固定
-- [ ] cudnn.benchmark 设置一致
-- [ ] 环境信息完整记录（硬件+软件）
+### 训练日志
+| 项目 | 说明 | 必须 |
+|------|------|:----:|
+| **epoch** | 当前 epoch | ✅ |
+| **step** | 当前 step | ✅ |
+| **train_loss** | 训练损失 | ✅ |
+| **val_loss** | 验证损失 | ✅ |
+| **learning_rate** | 当前学习率 | ✅ |
+| **grad_norm** | 梯度范数 | ✅ |
+| **batch_time** | 每 batch 时间 | ✅ |
+| **data_time** | 数据加载时间 | ✅ |
+| **memory_used** | 显存占用 | ✅ |
 
-### 数据准备
-- [ ] 评测数据集准备完成
-- [ ] 校准集准备完成（≥512张）
-- [ ] 数据集路径配置正确
+### 蒸馏专用
+| 项目 | 说明 | 必须 |
+|------|------|:----:|
+| **L_task** | 任务损失 | ✅ |
+| **L_kd** | KL 散度损失 | ✅ |
+| **L_fd** | 特征蒸馏损失 | ✅ |
+| **temperature** | 蒸馏温度 T | ✅ |
+| **alpha/beta/gamma** | 损失权重 | ✅ |
 
-### 测试脚本
-- [ ] 能输出所有质量指标
-- [ ] 能输出所有效率指标
-- [ ] 能输出所有资源指标
-- [ ] 日志格式符合统一 JSON schema
-- [ ] 记录 commit hash 和测试日期
+### 剪枝专用
+| 项目 | 说明 | 必须 |
+|------|------|:----:|
+| **sparsity** | 当前稀疏度 | ✅ |
+| **pruned_params** | 已剪枝参数量 | ✅ |
+| **pruned_flops** | 已剪枝 FLOPs | ✅ |
+| **importance_scores** | 重要性分数分布 | ✅ |
 
-### 测试执行
-- [ ] warm-up 次数 ≥ 10
-- [ ] 测量次数 ≥ 100
-- [ ] 显存清理后再测
-- [ ] 无其他 GPU 进程干扰
+### 量化专用
+| 项目 | 说明 | 必须 |
+|------|------|:----:|
+| **quant_loss** | 量化损失 | ✅ |
+| **scale_factors** | 量化缩放因子 | ✅ |
+| **zero_points** | 量化零点 | ✅ |
+| **calibration_stats** | 校准统计 | ✅ |
 
-### 输出检查
-- [ ] JSON 日志完整
-- [ ] 报告文档生成
-- [ ] 图表生成（如需要）
-
----
-
-## 十一、指标汇总表
-
-### 总计指标数量
-
-| 类别 | 必须 | 可选 | 合计 |
-|------|------|------|------|
-| 模型本体 | 5 | 1 | 6 |
-| 显存内存 | 2 | 1 | 3 |
-| 推理性能 | 6 | 1 | 7 |
-| DUSt3R官方 | 4 | 0 | 4 |
-| 位姿估计 | 8 | 0 | 8 |
-| 深度几何 | 7 | 1 | 8 |
-| 点云3D | 5 | 1 | 6 |
-| 场景级别 | 4 | 0 | 4 |
-| 匹配质量 | 3 | 1 | 4 |
-| 能耗 | 5 | 1 | 6 |
-| 边缘设备 | 1 | 4 | 5 |
-| 环境信息 | 25+ | 5+ | 30+ |
-| **合计** | **75+** | **16+** | **91+** |
+### 检查点记录
+| 项目 | 说明 | 必须 |
+|------|------|:----:|
+| **best_ckpt** | 最佳检查点路径 | ✅ |
+| **last_ckpt** | 最新检查点路径 | ✅ |
+| **best_metric** | 最佳指标值 | ✅ |
+| **best_epoch** | 最佳 epoch | ✅ |
+| **early_stop_counter** | 早停计数器 | ✅ |
 
 ---
 
-## 十二、关键原则
+## 十四、超参数记录
 
-> **Baseline 的目标不是"跑得快"，而是建立一个"可复现、可对比、可扩展"的参考坐标系**
+### 通用超参数
+| 项目 | 示例 | 必须 |
+|------|------|:----:|
+| **optimizer** | AdamW | ✅ |
+| **lr_init** | 1e-4 | ✅ |
+| **lr_min** | 1e-6 | ✅ |
+| **lr_scheduler** | cosine | ✅ |
+| **warmup_epochs** | 5 | ✅ |
+| **weight_decay** | 0.01 | ✅ |
+| **batch_size** | 16 | ✅ |
+| **accum_iter** | 4 | ✅ |
+| **max_epochs** | 100 | ✅ |
+| **clip_grad** | 1.0 | ✅ |
 
-1. ✅ 必须统一测试平台（GPU + 软件栈）
-2. ❌ 不需要一开始就在边缘设备上测
-3. ✅ 必须把"与硬件强相关"和"与模型本身相关"的指标分开记录
-4. ✅ Baseline 现在测一次，后面所有轻量化方法都只在这个 baseline 上对比
-5. ❌ 不要 baseline 用 A100，轻量化用 RTX3060（混着报 latency 无效）
-6. ✅ DUSt3R 官方指标（L21, Regr3D, pose_error）必须测
-7. ✅ 所有指标用统一的 JSON schema 记录
+### 蒸馏超参数
+| 项目 | 示例 | 必须 |
+|------|------|:----:|
+| **T (temperature)** | 3.0 | ✅ |
+| **alpha** | 0.5 | ✅ |
+| **beta (KL weight)** | 0.7 | ✅ |
+| **gamma (FD weight)** | 0.1 | ✅ |
+| **student_arch** | ViT-S | ✅ |
+| **teacher_frozen** | True | ✅ |
+
+### 剪枝超参数
+| 项目 | 示例 | 必须 |
+|------|------|:----:|
+| **rho (target sparsity)** | 0.3 | ✅ |
+| **pruning_method** | L1 | ✅ |
+| **pruning_schedule** | gradual | ✅ |
+| **pruning_start_epoch** | 5 | ✅ |
+| **pruning_end_epoch** | 50 | ✅ |
+| **finetune_epochs** | 15 | ✅ |
+
+### 量化超参数
+| 项目 | 示例 | 必须 |
+|------|------|:----:|
+| **bits_weight** | 8 | ✅ |
+| **bits_activation** | 8 | ✅ |
+| **quant_mode** | PTQ/QAT | ✅ |
+| **calibration_size** | 512 | ✅ |
+| **keep_list** | [LN, Softmax] | ✅ |
+| **symmetric** | True | ✅ |
+| **per_channel** | True | ✅ |
+
+---
+
+## 十五、实验元数据
+
+### 实验标识
+| 项目 | 示例 | 必须 |
+|------|------|:----:|
+| **exp_id** | K-only_v1 | ✅ |
+| **exp_name** | 蒸馏实验1 | ✅ |
+| **combo** | K-only / P→K / K→Q | ✅ |
+| **run_id** | run_001 | ✅ |
+| **parent_exp** | baseline_v1 | ✅ |
+
+### 时间记录
+| 项目 | 示例 | 必须 |
+|------|------|:----:|
+| **start_time** | 2025-12-25 10:00:00 | ✅ |
+| **end_time** | 2025-12-25 18:30:00 | ✅ |
+| **total_time_h** | 8.5 | ✅ |
+| **gpu_hours** | 8.5 | ✅ |
+
+### 成本记录
+| 项目 | 示例 | 必须 |
+|------|------|:----:|
+| **gpu_type** | H100 | ✅ |
+| **gpu_price_per_h** | $6.88 | ✅ |
+| **total_cost** | $58.48 | ✅ |
+| **cloud_provider** | Lambda Labs | ✅ |
+
+### 状态记录
+| 项目 | 示例 | 必须 |
+|------|------|:----:|
+| **status** | completed / failed / running | ✅ |
+| **exit_code** | 0 | ✅ |
+| **error_msg** | (如有) | ✅ |
+| **notes** | 备注 | ✅ |
+
+---
+
+## 十六、可视化输出
+
+### 训练曲线
+| 项目 | 格式 | 必须 |
+|------|------|:----:|
+| **loss_curve.png** | PNG | ✅ |
+| **lr_curve.png** | PNG | ✅ |
+| **metric_curve.png** | PNG | ✅ |
+| **grad_norm_curve.png** | PNG | ✅ |
+| **tensorboard_logs/** | TensorBoard | ✅ |
+| **wandb_logs/** | W&B | 可选 |
+
+### 结果可视化
+| 项目 | 格式 | 必须 |
+|------|------|:----:|
+| **pointcloud_vis.ply** | PLY | ✅ |
+| **depth_vis.png** | PNG | ✅ |
+| **match_vis.png** | PNG | ✅ |
+| **error_heatmap.png** | PNG | ✅ |
+| **confidence_vis.png** | PNG | ✅ |
+
+### 对比图
+| 项目 | 格式 | 必须 |
+|------|------|:----:|
+| **teacher_vs_student.png** | PNG | ✅ |
+| **before_after_prune.png** | PNG | ✅ |
+| **fp32_vs_int8.png** | PNG | ✅ |
+| **tradeoff_curve.png** | PNG | ✅ |
+
+---
+
+## 十七、失败与调试记录
+
+### 错误日志
+| 项目 | 说明 | 必须 |
+|------|------|:----:|
+| **error_type** | OOM / NaN / Diverge | ✅ |
+| **error_msg** | 完整错误信息 | ✅ |
+| **error_traceback** | 堆栈信息 | ✅ |
+| **error_epoch** | 出错 epoch | ✅ |
+| **error_step** | 出错 step | ✅ |
+
+### 调试信息
+| 项目 | 说明 | 必须 |
+|------|------|:----:|
+| **gpu_memory_snapshot** | 显存快照 | ✅ |
+| **nan_check** | NaN 检测结果 | ✅ |
+| **gradient_overflow** | 梯度溢出检测 | ✅ |
+| **input_stats** | 输入数据统计 | ✅ |
+| **output_stats** | 输出数据统计 | ✅ |
+
+### 恢复信息
+| 项目 | 说明 | 必须 |
+|------|------|:----:|
+| **resume_from** | 恢复检查点 | ✅ |
+| **resume_epoch** | 恢复 epoch | ✅ |
+| **retry_count** | 重试次数 | ✅ |
+
+---
+
+## 十八、数据集详细信息
+
+### 训练数据
+| 项目 | 示例 | 必须 |
+|------|------|:----:|
+| **train_dataset** | CO3Dv2 | ✅ |
+| **train_split** | train | ✅ |
+| **train_size** | 50000 pairs | ✅ |
+| **train_resolution** | 512×384 | ✅ |
+| **augmentation** | ColorJitter, RandomCrop | ✅ |
+
+### 验证数据
+| 项目 | 示例 | 必须 |
+|------|------|:----:|
+| **val_dataset** | CO3Dv2 | ✅ |
+| **val_split** | val | ✅ |
+| **val_size** | 5000 pairs | ✅ |
+| **val_frequency** | every epoch | ✅ |
+
+### 测试数据
+| 项目 | 示例 | 必须 |
+|------|------|:----:|
+| **test_dataset** | ScanNet++ | ✅ |
+| **test_split** | test | ✅ |
+| **test_size** | 1000 pairs | ✅ |
+
+### 校准数据（量化用）
+| 项目 | 示例 | 必须 |
+|------|------|:----:|
+| **calib_dataset** | CO3Dv2 subset | ✅ |
+| **calib_size** | 512 张 | ✅ |
+| **calib_selection** | random | ✅ |
+
+---
+
+## 十九、模型文件输出
+
+### 检查点文件
+| 文件 | 说明 | 必须 |
+|------|------|:----:|
+| **best.pth** | 最佳模型权重 | ✅ |
+| **last.pth** | 最新模型权重 | ✅ |
+| **optimizer.pth** | 优化器状态 | ✅ |
+| **scheduler.pth** | 调度器状态 | ✅ |
+| **config.yaml** | 实验配置 | ✅ |
+
+### 导出格式
+| 文件 | 说明 | 必须 |
+|------|------|:----:|
+| **model.onnx** | ONNX 格式 | ✅ |
+| **model.engine** | TensorRT 引擎 | 可选 |
+| **model_fp16.pth** | FP16 权重 | ✅ |
+| **model_int8.pth** | INT8 权重 | 可选 |
+
+### 元数据文件
+| 文件 | 说明 | 必须 |
+|------|------|:----:|
+| **model_card.md** | 模型说明卡 | ✅ |
+| **metrics.json** | 指标 JSON | ✅ |
+| **hyperparams.json** | 超参数 JSON | ✅ |
+
+---
+
+## 二十、论文材料清单
+
+### 表格数据
+| 项目 | 格式 | 必须 |
+|------|------|:----:|
+| **main_results.csv** | 主实验结果 | ✅ |
+| **ablation_results.csv** | 消融实验结果 | ✅ |
+| **comparison_results.csv** | 对比实验结果 | ✅ |
+| **latex_tables/** | LaTeX 表格 | ✅ |
+
+### 图表
+| 项目 | 格式 | 必须 |
+|------|------|:----:|
+| **figure_*.pdf** | 论文图（矢量） | ✅ |
+| **figure_*.png** | 论文图（高清） | ✅ |
+| **supplementary/** | 补充材料图 | ✅ |
+
+### 复现材料
+| 项目 | 说明 | 必须 |
+|------|------|:----:|
+| **requirements.txt** | 依赖列表 | ✅ |
+| **run_all.sh** | 一键运行脚本 | ✅ |
+| **README.md** | 复现说明 | ✅ |
+| **pretrained_weights/** | 预训练权重链接 | ✅ |
+
+---
+
+## 二十一、Git 版本记录
+
+### 代码版本
+| 项目 | 说明 | 必须 |
+|------|------|:----:|
+| **main_repo_commit** | 主仓库 commit | ✅ |
+| **dust3r_commit** | DUSt3R submodule commit | ✅ |
+| **croco_commit** | CroCo submodule commit | ✅ |
+| **branch** | 分支名 | ✅ |
+| **tag** | 版本标签 | 可选 |
+
+### 变更记录
+| 项目 | 说明 | 必须 |
+|------|------|:----:|
+| **git_diff** | 与基线的代码差异 | ✅ |
+| **modified_files** | 修改的文件列表 | ✅ |
+| **config_diff** | 配置差异 | ✅ |
+
+---
+
+## 二十二、最终指标统计
+
+### 总记录项数量
+
+| 大类 | 子类数 | 字段数 |
+|------|--------|--------|
+| 测试指标 | 11 | 91+ |
+| 训练记录 | 5 | 30+ |
+| 超参数 | 4 | 35+ |
+| 实验元数据 | 4 | 20+ |
+| 可视化 | 3 | 15+ |
+| 失败调试 | 3 | 15+ |
+| 数据集 | 4 | 15+ |
+| 模型文件 | 3 | 12+ |
+| 论文材料 | 3 | 10+ |
+| Git版本 | 2 | 8+ |
+| **合计** | **42** | **250+** |
 
 ---
 
