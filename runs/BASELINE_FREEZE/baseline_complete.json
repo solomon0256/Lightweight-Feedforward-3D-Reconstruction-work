@@ -1,0 +1,133 @@
+{
+  "exp_id": "baseline_teacher_v1",
+  "model": "DUSt3R_ViTLarge_BaseDecoder_512_dpt",
+  "datetime": "2025-12-25T23:30:00",
+  "commit": "babb0331e16baacc28fe6862fca08f69d4c259fe",
+  "dust3r_commit": "4c24a6ebf04809f2cfe59915e51779c8984aaa40",
+  
+  "model_info": {
+    "params_total_M": 571.17,
+    "params_encoder_M": 303.10,
+    "params_decoder_M": 267.28,
+    "flops_G": 929.40,
+    "macs_G": 464.70,
+    "size_MB": 2284.79
+  },
+  
+  "resources": {
+    "vram_peak_GB": 2.76,
+    "vram_fp16_GB": 3.85,
+    "activation_memory_GB": 0.53,
+    "note": "DUSt3R 内部禁用 autocast，FP16 实际无效"
+  },
+  
+  "latency": {
+    "t_pair_p50_ms": 353.07,
+    "t_pair_p95_ms": 371.81,
+    "t_pair_mean_ms": 352.14,
+    "t_pair_std_ms": 13.52,
+    "t_pair_min_ms": 322.73,
+    "t_pair_max_ms": 403.47,
+    "pairs_per_sec": 2.84,
+    "warmup_runs": 10,
+    "measure_runs": 100
+  },
+  
+  "quality_depth": {
+    "dataset": "7-Scenes heads",
+    "n_samples": 30,
+    "abs_rel": 0.1168,
+    "sq_rel": 0.0359,
+    "rmse_m": 0.1446,
+    "rmse_log": 0.1652,
+    "delta1": 0.8995,
+    "delta2": 0.9633,
+    "delta3": 0.9778,
+    "si_log": 0.1611,
+    "target_scannet": {
+      "abs_rel": 0.094,
+      "rmse": 0.35,
+      "delta1": 0.915
+    }
+  },
+  
+  "quality_pose_pairwise": {
+    "dataset": "7-Scenes heads (pairwise)",
+    "n_samples": 30,
+    "rre_deg": 6.06,
+    "rte_cm": 6.83,
+    "target_co3dv2": {
+      "rre_deg": 1.29,
+      "rte_cm": 2.11,
+      "maa": 0.872,
+      "note": "需要多视图全局优化才能达到"
+    }
+  },
+
+  "quality_pose_visloc": {
+    "dataset": "7-Scenes heads (visloc)",
+    "n_samples": 1000,
+    "pairsfile": "pose_based_top20",
+    "topk": 1,
+    "pnp_mode": "poselib",
+    "median_pos_error_cm": 1.85,
+    "median_angular_error_deg": 1.55,
+    "acc_0.1m_1deg": 32.1,
+    "acc_0.25m_2deg": 59.8,
+    "acc_0.5m_5deg": 77.6,
+    "acc_5m_10deg": 78.7,
+    "target_paper": {
+      "median_pos_error_cm": 2.0,
+      "median_angular_error_deg": 1.37,
+      "note": "论文 Table 1 DUSt3R 512 2D-matching"
+    }
+  },
+  
+  "energy": {
+    "status": "待测",
+    "gpu_power_avg_W": null,
+    "gpu_power_peak_W": null,
+    "energy_per_pair_J": null,
+    "thermal_throttling": null
+  },
+  
+  "environment": {
+    "gpu": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "gpu_memory_GB": 6,
+    "gpu_driver": "572.83",
+    "cpu": "12th Gen Intel Core i7-12700H",
+    "cpu_cores": 14,
+    "ram_GB": 16,
+    "os": "Windows 11 专业版",
+    "python": "3.13.6",
+    "pytorch": "2.6.0+cu124",
+    "cuda": "12.4",
+    "cudnn": "90100",
+    "numpy": "2.2.6",
+    "opencv": "4.12.0.88"
+  },
+  
+  "settings": {
+    "input_resolution": [384, 512],
+    "batch_size": 1,
+    "precision": "FP32",
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": false,
+    "allow_tf32": true,
+    "random_seed": 42
+  },
+  
+  "validation_summary": {
+    "step1_environment": "PASS",
+    "step2_verification": "PASS",
+    "step3_model_stats": "PASS (571.17M params, 464.7G MACs)",
+    "step4_vram": "PASS (2.76GB FP32)",
+    "step5_latency": "PASS (353ms p50, 2.84 pairs/sec)",
+    "step6_energy": "PENDING",
+    "step7_depth_accuracy": "PASS (完整深度指标: AbsRel=0.1168, SqRel=0.0359, δ1/δ2/δ3=0.90/0.96/0.98)",
+    "step8_pose_accuracy_visloc": "PASS (VisLoc: 1.85cm/1.55° 达到论文水平)",
+    "step8_pose_accuracy_pairwise": "PASS (Pairwise: RRE=6.06°, RTE=6.83cm)"
+  },
+
+  "last_updated": "2025-12-26T20:30:00"
+}

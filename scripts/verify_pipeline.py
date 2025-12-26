@@ -10,13 +10,22 @@ Pipeline 验证脚本 (本地小规模测试)
      - 验证输入输出格式、文件保存、日志记录
 
 用法：
-    python scripts/verify_pipeline.py --all           # 验证所有阶段 (需要足够显存)
-    python scripts/verify_pipeline.py --all --light   # 轻量模式 (用 Mock 模型)
-    python scripts/verify_pipeline.py --pruning       # 只验证剪枝
-    python scripts/verify_pipeline.py --quantization  # 只验证量化
-    python scripts/verify_pipeline.py --distillation  # 只验证蒸馏
+    python scripts/verify_pipeline.py --all              # 完整模式 (需要 GPU 大显存)
+    python scripts/verify_pipeline.py --all --light      # Mock 模式 (验证代码语法)
+    python scripts/verify_pipeline.py --all --real-cpu   # CPU 模式 (用真实 DUSt3R 调试)
+    python scripts/verify_pipeline.py --pruning          # 只验证剪枝
+    python scripts/verify_pipeline.py --quantization     # 只验证量化
+    python scripts/verify_pipeline.py --distillation     # 只验证蒸馏
 
-验证通过后，可以放心在服务器上运行完整任务！
+三种模式说明：
+    --light:    用假的 Mock 模型，验证代码语法和 API 用法（秒级）
+    --real-cpu: 用真实 DUSt3R 在 CPU 上跑，验证模型能否被正确处理（分钟级）
+    (默认):     用真实 DUSt3R 在 GPU 上跑，完整验证（需要大显存）
+
+推荐工作流：
+    1. 写代码 → --light 验证语法
+    2. 语法通过 → --real-cpu 验证真实模型
+    3. 本地通过 → 服务器完整实验
 """
 
 import sys
@@ -70,10 +79,11 @@ def print_info(msg):
 class PipelineVerifier:
     """Pipeline 验证器"""
     
-    def __init__(self, device="cuda", verbose=True, light_mode=False):
+    def __init__(self, device="cuda", verbose=True, light_mode=False, real_cpu_mode=False):
         self.device = device
         self.verbose = verbose
         self.light_mode = light_mode
+        self.real_cpu_mode = real_cpu_mode
         self.results = {}
         self.temp_dir = None
         self.model = None
@@ -86,8 +96,11 @@ class PipelineVerifier:
         
         if self.light_mode:
             print_info("🔹 轻量模式：使用 Mock 模型验证代码逻辑")
+        elif self.real_cpu_mode:
+            print_info("🔸 CPU 模式：使用真实 DUSt3R 在 CPU 上调试")
+            self.device = "cpu"  # 强制 CPU
         else:
-            print_info("🔸 完整模式：使用真实 DUSt3R 模型")
+            print_info("🔶 完整模式：使用真实 DUSt3R 模型 (GPU)")
         
         # 检查 PyTorch
         print_info(f"PyTorch: {torch.__version__}")
@@ -484,14 +497,24 @@ def main():
     parser.add_argument("--quantization", action="store_true", help="只验证量化")
     parser.add_argument("--distillation", action="store_true", help="只验证蒸馏")
     parser.add_argument("--device", default="cuda", help="设备 (cuda/cpu)")
-    parser.add_argument("--light", action="store_true", help="轻量模式：不加载完整模型，只验证代码逻辑")
+    parser.add_argument("--light", action="store_true", help="Mock 模式：用假模型验证代码语法")
+    parser.add_argument("--real-cpu", action="store_true", dest="real_cpu", 
+                        help="CPU 模式：用真实 DUSt3R 在 CPU 上调试（推荐本地调试用）")
     args = parser.parse_args()
     
     # 默认验证所有
     if not (args.pruning or args.quantization or args.distillation):
         args.all = True
     
-    verifier = PipelineVerifier(device=args.device, light_mode=args.light)
+    # 如果同时指定了 --light 和 --real-cpu，以 --real-cpu 为准
+    if args.real_cpu:
+        args.light = False
+    
+    verifier = PipelineVerifier(
+        device=args.device, 
+        light_mode=args.light,
+        real_cpu_mode=args.real_cpu
+    )
     
     try:
         # 初始化

@@ -1,0 +1,68 @@
+{
+  "_description": "环境快照 - 用于复现实验环境",
+  "_created": "2025-12-25T21:39:53",
+  "_purpose": "记录完整实验环境，便于环境恢复和结果复现",
+
+  "gpu": {
+    "gpu_name": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "gpu_memory_GB": 6.0,
+    "cuda_version": "12.4",
+    "cudnn_version": "90100",
+    "driver_version": "572.83",
+    "compute_capability": "8.6",
+    "device_count": 1
+  },
+
+  "software": {
+    "python_version": "3.13.6",
+    "pytorch_version": "2.6.0+cu124",
+    "torchvision_version": "0.21.0+cu124"
+  },
+
+  "system": {
+    "os": "Windows 11",
+    "os_version": "10.0.26200",
+    "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+    "cpu_count": 20,
+    "ram_total_GB": 15.63,
+    "architecture": "64bit"
+  },
+
+  "packages": {
+    "numpy": "2.2.6",
+    "opencv-python": "4.12.0.88",
+    "pillow": "12.0.0",
+    "scipy": "1.16.3",
+    "matplotlib": "3.10.8",
+    "einops": "0.8.1",
+    "roma": "1.5.4",
+    "gradio": "6.2.0",
+    "tqdm": "4.67.1",
+    "psutil": "7.2.0"
+  },
+
+  "git_commits": {
+    "main_repo": "babb0331e16baacc28fe6862fca08f69d4c259fe",
+    "dust3r_submodule": "4c24a6ebf04809f2cfe59915e51779c8984aaa40"
+  },
+
+  "experiment_config": {
+    "input_resolution": "512x384",
+    "batch_size": 1,
+    "precision": "FP32",
+    "seed": 42,
+    "cudnn_benchmark": true,
+    "cudnn_deterministic": false,
+    "allow_tf32": true
+  },
+
+  "model_info": {
+    "model_name": "DUSt3R_ViTLarge_BaseDecoder_512_dpt",
+    "model_source": "naver/DUSt3R_ViTLarge_BaseDecoder_512_dpt",
+    "params_total_M": 571.17,
+    "params_encoder_M": 303.10,
+    "params_decoder_M": 226.88,
+    "macs_G": 408,
+    "flops_G": 815
+  }
+}

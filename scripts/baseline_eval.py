@@ -14,6 +14,7 @@ Baseline 评测脚本 - Teacher 模型评测
 
 import argparse
 import sys
+import os
 import json
 from pathlib import Path
 from datetime import datetime
@@ -37,46 +38,47 @@ from scripts.utils.metrics import MetricsCalculator, QualityMetrics
 
 # ============ DUSt3R 模型加载（适配层）============
 
-def load_dust3r_model(weights_path: str, device: str = 'cuda') -> nn.Module:
-    """
-    加载 DUSt3R Teacher 模型
+def setup_dust3r_paths():
+    """设置 DUSt3R 和 CroCo 路径"""
+    dust3r_path = PROJECT_ROOT / 'third_party' / 'dust3r'
+    croco_path = dust3r_path / 'croco'
     
-    注意：需要根据实际 DUSt3R 安装方式调整
-    """
-    # 方式1：尝试从 dust3r 包导入
-    try:
-        from dust3r.model import AsymmetricCroCo3DStereo
-        from dust3r.inference import load_model
-        
-        model = load_model(weights_path, device=device)
-        print(f"[INFO] Loaded DUSt3R model from: {weights_path}")
-        return model
-    except ImportError:
-        pass
+    # 确保 croco/models/__init__.py 存在
+    croco_models_init = croco_path / 'models' / '__init__.py'
+    if not croco_models_init.exists():
+        croco_models_init.parent.mkdir(parents=True, exist_ok=True)
+        croco_models_init.touch()
     
-    # 方式2：尝试从本地 checkpoints 加载
-    try:
-        # 假设使用标准 PyTorch 保存格式
-        checkpoint = torch.load(weights_path, map_location=device)
-        
-        # 检查是否包含模型定义
-        if 'model' in checkpoint:
-            model = checkpoint['model']
-        elif 'state_dict' in checkpoint:
-            # 需要先构建模型架构
-            raise NotImplementedError(
-                "Model architecture needed. Please install dust3r package or "
-                "provide model class."
-            )
-        else:
-            raise ValueError(f"Unknown checkpoint format: {checkpoint.keys()}")
-        
-        model = model.to(device)
-        model.eval()
-        return model
-    except Exception as e:
-        print(f"[ERROR] Failed to load model: {e}")
-        raise
+    # 添加到 sys.path
+    for p in [str(dust3r_path), str(croco_path)]:
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+
+def load_dust3r_model(model_name: str = 'naver/DUSt3R_ViTLarge_BaseDecoder_512_dpt', device: str = 'cuda') -> nn.Module:
+    """
+    加载 DUSt3R Teacher 模型（从 HuggingFace Hub）
+    
+    Args:
+        model_name: HuggingFace 模型名称，默认 'naver/DUSt3R_ViTLarge_BaseDecoder_512_dpt'
+        device: 设备 ('cuda' / 'cpu')
+    
+    Returns:
+        加载好的模型
+    """
+    setup_dust3r_paths()
+    
+    from dust3r.model import AsymmetricCroCo3DStereo
+    
+    print(f"[INFO] Loading DUSt3R from HuggingFace: {model_name}")
+    model = AsymmetricCroCo3DStereo.from_pretrained(model_name)
+    model = model.to(device)
+    model.eval()
+    
+    params = sum(p.numel() for p in model.parameters())
+    print(f"[INFO] Model loaded: {params/1e6:.2f}M parameters")
+    
+    return model
 
 
 def create_dummy_model(device: str = 'cuda') -> nn.Module:
@@ -199,6 +201,28 @@ def create_dummy_batch(shape: tuple, device: str):
     return img1, img2
 
 
+def create_temp_test_images(tmp_dir: str) -> tuple:
+    """创建临时测试图像"""
+    import numpy as np
+    from PIL import Image
+    
+    # 创建有视差的测试图像
+    img1 = np.zeros((384, 512, 3), dtype=np.uint8)
+    img1[100:200, 150:350] = [255, 0, 0]
+    img1[200:300, 200:400] = [0, 255, 0]
+    
+    img2 = np.zeros((384, 512, 3), dtype=np.uint8)
+    img2[100:200, 170:370] = [255, 0, 0]
+    img2[200:300, 220:420] = [0, 255, 0]
+    
+    img1_path = os.path.join(tmp_dir, "view1.png")
+    img2_path = os.path.join(tmp_dir, "view2.png")
+    Image.fromarray(img1).save(img1_path)
+    Image.fromarray(img2).save(img2_path)
+    
+    return img1_path, img2_path
+
+
 # ============ 评测主流程 ============
 
 def run_baseline_eval(
@@ -210,7 +234,7 @@ def run_baseline_eval(
     dry_run: bool = False,
 ) -> dict:
     """
-    运行基线评测
+    运行基线评测（使用 DUSt3R 官方推理 API）
     
     Returns:
         {
@@ -219,6 +243,11 @@ def run_baseline_eval(
             'quality': QualityMetrics,
         }
     """
+    # 导入 DUSt3R 推理工具
+    from dust3r.utils.image import load_images
+    from dust3r.image_pairs import make_pairs
+    from dust3r.inference import inference
+    
     model.eval()
     
     # 1. 模型统计
@@ -238,33 +267,55 @@ def run_baseline_eval(
     metrics_calc = MetricsCalculator(device=device)
     all_quality = []
     
+    # 干跑模式：创建临时测试图像
+    if dry_run:
+        import tempfile
+        tmp_dir = tempfile.mkdtemp()
+        dummy_img1, dummy_img2 = create_temp_test_images(tmp_dir)
+    
     with torch.no_grad():
         for i, (img1_path, img2_path) in enumerate(pairs):
-            # 加载数据
+            # 干跑模式使用临时图像
             if dry_run:
-                img1, img2 = create_dummy_batch(input_shape, device)
-            else:
-                img1, img2 = load_image_pair(img1_path, img2_path, input_shape, device)
+                img1_path, img2_path = dummy_img1, dummy_img2
+            
+            # 使用 DUSt3R 官方 API 加载图像
+            imgs = load_images([img1_path, img2_path], size=512, verbose=False)
+            img_pairs = make_pairs(imgs, scene_graph="complete", prefilter=None, symmetrize=True)
             
             # 推理计时
             with timer.measure():
-                output = model(img1, img2)
+                output = inference(img_pairs, model, device, batch_size=1, verbose=False)
             
-            # 质量指标（干跑时用随机 GT）
+            # 提取输出
+            pred1 = output['pred1']
+            pred2 = output['pred2']
+            
+            # 质量指标
+            pts3d = pred1['pts3d']  # [B, H, W, 3]
+            conf = pred1['conf']    # [B, H, W]
+            
+            # 干跑时用自身作为 GT（仅验证流程）
             if dry_run:
                 gt_output = {
-                    'pts3d': output.get('pts3d', torch.randn_like(img1)),
-                    'depth': output.get('depth', torch.rand(1, 1, input_shape[2], input_shape[3], device=device)),
+                    'pts3d': pts3d,
+                    'conf': conf,
                 }
             else:
-                gt_output = output  # 实际评测时需要加载 GT
+                gt_output = {'pts3d': pts3d, 'conf': conf}
             
             # 计算质量指标
-            quality = metrics_calc.compute_from_outputs(output, gt_output)
+            eval_output = {'pts3d': pts3d, 'conf': conf}
+            quality = metrics_calc.compute_from_outputs(eval_output, gt_output)
             all_quality.append(quality)
             
             if (i + 1) % 10 == 0:
                 print(f"  Processed {i + 1}/{len(pairs)} pairs")
+    
+    # 清理临时文件
+    if dry_run:
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     
     # 汇总时延
     timing = timer.get_result()
@@ -371,14 +422,9 @@ def main():
     if args.dry_run:
         model = create_dummy_model(device)
     else:
-        weights_path = args.weights or config.experiment.get('teacher', {}).get('weights')
-        if not weights_path:
-            print("[ERROR] No weights path specified. Use --weights or set in config.")
-            print("[INFO] Running in dry-run mode instead...")
-            model = create_dummy_model(device)
-            args.dry_run = True
-        else:
-            model = load_dust3r_model(weights_path, device)
+        # 直接从 HuggingFace 加载，不需要本地权重文件
+        model_name = args.weights or 'naver/DUSt3R_ViTLarge_BaseDecoder_512_dpt'
+        model = load_dust3r_model(model_name, device)
     
     # 加载评测数据
     if args.dry_run:
