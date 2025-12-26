@@ -93,16 +93,58 @@ def measure_vram(model: nn.Module, input_shape: Tuple[int, ...], device: str = '
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     
-    # 运行一次推理
-    dummy_input = torch.randn(*input_shape, device=device)
-    with torch.no_grad():
-        _ = model(dummy_input)
+    # 使用 DUSt3R 官方推理方式（参考 test_dust3r_baseline.py）
+    try:
+        import tempfile
+        import numpy as np
+        from PIL import Image
+        
+        # 添加 dust3r 路径
+        import sys
+        import os
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        dust3r_path = os.path.join(project_root, 'third_party', 'dust3r')
+        croco_path = os.path.join(dust3r_path, 'croco')
+        for p in [dust3r_path, croco_path]:
+            if p not in sys.path:
+                sys.path.insert(0, p)
+        
+        from dust3r.utils.image import load_images
+        from dust3r.image_pairs import make_pairs
+        from dust3r.inference import inference
+        
+        # 创建临时测试图像
+        B, C, H, W = input_shape
+        tmp_dir = tempfile.mkdtemp()
+        img1 = np.random.randint(0, 255, (H, W, 3), dtype=np.uint8)
+        img2 = np.random.randint(0, 255, (H, W, 3), dtype=np.uint8)
+        img1_path = os.path.join(tmp_dir, 'view1.png')
+        img2_path = os.path.join(tmp_dir, 'view2.png')
+        Image.fromarray(img1).save(img1_path)
+        Image.fromarray(img2).save(img2_path)
+        
+        # 加载图像并推理
+        imgs = load_images([img1_path, img2_path], size=max(H, W), verbose=False)
+        pairs = make_pairs(imgs, scene_graph='complete', prefilter=None, symmetrize=True)
+        
+        torch.cuda.synchronize()
+        with torch.no_grad():
+            _ = inference(pairs, model, device, batch_size=1, verbose=False)
+        torch.cuda.synchronize()
+        
+        # 清理临时文件
+        import shutil
+        shutil.rmtree(tmp_dir)
+        
+    except Exception as e:
+        print(f"[WARN] VRAM measurement with DUSt3R inference failed: {e}")
+        # 回退：只测量模型加载显存
+        pass
     
     # 获取峰值显存
     peak_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)  # GB
     
     # 清理
-    del dummy_input
     torch.cuda.empty_cache()
     
     return peak_memory

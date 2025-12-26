@@ -1,0 +1,66 @@
+# Baseline Evaluation Commands
+# Date: 2025-12-26
+# Environment: RTX 4070 / Windows 11 / PyTorch 2.1 / CUDA 12.1
+
+# ============================================================
+# 1. VisLoc Evaluation (7-Scenes heads)
+# ============================================================
+
+cd C:\Users\SoLoMoN\Documents\GitHub\Lightweight-Feedforward-3D-Reconstruction-work\third_party\dust3r
+
+python visloc.py --model_name DUSt3R_ViTLarge_BaseDecoder_512_dpt \
+  --dataset "VislocSevenScenes('C:/Users/SoLoMoN/Documents/GitHub/Lightweight-Feedforward-3D-Reconstruction-work/datasets/7-scenes', subscene='heads', pairsfile='pose_based_top20', topk=1)" \
+  --pnp_mode poselib \
+  --reprojection_error_diag_ratio 0.008 \
+  --output_dir "C:/Users/SoLoMoN/Documents/GitHub/Lightweight-Feedforward-3D-Reconstruction-work/outputs/visloc_7scenes_pose_pairs"
+
+# Result:
+# median_pos_error=0.018499868736144447 (1.85cm)
+# median_angular_error=1.5481802411599823 (1.55°)
+# acc@0.1m,1deg=32.100
+# acc@0.25m,2deg=59.800
+# acc@0.5m,5deg=77.600
+# acc@5m,10deg=78.700
+
+# ============================================================
+# 2. Depth + Pose Evaluation
+# ============================================================
+
+cd C:\Users\SoLoMoN\Documents\GitHub\Lightweight-Feedforward-3D-Reconstruction-work
+
+python scripts/eval_depth_pose.py \
+  --dataset "datasets/7-scenes/heads" \
+  --max-pairs 30 \
+  --output "logs/depth_metrics_complete.json"
+
+# Result:
+# Depth: absrel=0.1168, sqrel=0.0359, rmse=0.1446, rmse_log=0.1652
+#        delta1=0.8995, delta2=0.9633, delta3=0.9778, si_log=0.1611
+# Pose:  RRE=6.06°, RTE=6.83cm
+
+# ============================================================
+# 3. Latency/VRAM Profiling
+# ============================================================
+
+python scripts/profile_model.py \
+  --model DUSt3R_ViTLarge_BaseDecoder_512_dpt \
+  --resolution 512 384 \
+  --warmup 10 \
+  --iterations 100
+
+# Result:
+# params_total=571,166,720
+# MACs=464.7G
+# vram_peak=2.76GB
+# t_pair_p50=353ms
+
+# ============================================================
+# 4. Generate Pose-Based Pairs (Critical Step!)
+# ============================================================
+
+python scripts/generate_pose_based_pairs.py \
+  --dataset_root "datasets/7-scenes" \
+  --subscene heads \
+  --topk 20
+
+# Output: datasets/7-scenes/heads/pairfiles/query/pose_based_top20.txt
