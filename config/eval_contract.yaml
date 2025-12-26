@@ -25,8 +25,8 @@ data:
 # 输入配置（不可变）
 # ============================================================
 input:
-  resolution: [512, 384]  # W x H
-  raw_resolution: [640, 480]
+  resolution: [ 512, 384 ] # W x H
+  raw_resolution: [ 640, 480 ]
   intrinsics:
     fx: 525.0
     fy: 525.0
@@ -45,20 +45,20 @@ output_route:
     pnp_mode: "poselib"
     reprojection_error_diag_ratio: 0.008
     topk: 1
-  
+
   # 单目深度: F(I, I), depth = pts3d[:,:,2]
   depth:
     method: "self_pair"
-    depth_source: "pts3d_z"  # depth = pts3d[:,:,2]
+    depth_source: "pts3d_z" # depth = pts3d[:,:,2]
     valid_mask: "confidence > 0"
 
 # ============================================================
 # 尺度对齐策略（不可变）
 # ============================================================
 scale_alignment:
-  method: "median_ratio"  # scale = median(gt / pred)
-  clip_range: [0.1, 10.0]
-  apply_to: ["depth", "pts3d"]
+  method: "median_ratio" # scale = median(gt / pred)
+  clip_range: [ 0.1, 10.0 ]
+  apply_to: [ "depth", "pts3d" ]
 
 # ============================================================
 # 核心 KPI（与 baseline 同 schema）
@@ -66,36 +66,36 @@ scale_alignment:
 core_kpi:
   # 位姿指标
   pose_visloc:
-    - median_pos_error_m      # 中位位置误差（米）
-    - median_angular_error_deg # 中位角度误差（度）
-    - acc_0.1m_1deg           # 准确率 @ 0.1m, 1°
-    - acc_0.25m_2deg          # 准确率 @ 0.25m, 2°
-    - acc_0.5m_5deg           # 准确率 @ 0.5m, 5°
-    - acc_5m_10deg            # 准确率 @ 5m, 10°
-  
+  - median_pos_error_m # 中位位置误差（米）
+  - median_angular_error_deg # 中位角度误差（度）
+  - acc_0.1m_1deg # 准确率 @ 0.1m, 1°
+  - acc_0.25m_2deg # 准确率 @ 0.25m, 2°
+  - acc_0.5m_5deg # 准确率 @ 0.5m, 5°
+  - acc_5m_10deg # 准确率 @ 5m, 10°
+
   pose_pairwise:
-    - rre_deg                 # 相对旋转误差（度）
-    - rte_m                   # 相对平移误差（米）
-  
+  - rre_deg # 相对旋转误差（度）
+  - rte_m # 相对平移误差（米）
+
   # 深度指标（8项完整）
   depth:
-    - absrel                  # 平均绝对相对误差
-    - sqrel                   # 平均平方相对误差
-    - rmse                    # 均方根误差（米）
-    - rmse_log                # 对数均方根误差
-    - delta1                  # δ < 1.25
-    - delta2                  # δ < 1.25²
-    - delta3                  # δ < 1.25³
-    - si_log                  # 尺度不变对数误差
-  
+  - absrel # 平均绝对相对误差
+  - sqrel # 平均平方相对误差
+  - rmse # 均方根误差（米）
+  - rmse_log # 对数均方根误差
+  - delta1 # δ < 1.25
+  - delta2 # δ < 1.25²
+  - delta3 # δ < 1.25³
+  - si_log # 尺度不变对数误差
+
   # 性能指标
   performance:
-    - t_pair_p50_ms           # 中位延迟
-    - t_pair_p95_ms           # 95分位延迟
-    - t_pair_mean_ms          # 平均延迟
-    - t_pair_std_ms           # 延迟标准差
-    - throughput_pairs_per_sec # 吞吐量
-    - vram_peak_gb            # 峰值显存
+  - t_pair_p50_ms # 中位延迟
+  - t_pair_p95_ms # 95分位延迟
+  - t_pair_mean_ms # 平均延迟
+  - t_pair_std_ms # 延迟标准差
+  - throughput_pairs_per_sec # 吞吐量
+  - vram_peak_gb # 峰值显存
 
 # ============================================================
 # 验证数据集配置
@@ -107,17 +107,17 @@ validation_sets:
     seed: 42
     purpose: "schema断言 + golden对比"
     max_time_minutes: 5
-  
+
   # 趋势集：验证性能趋势
   trend:
     num_pairs: 200
     seed: 42
     purpose: "早期预警阈值检查"
     max_time_minutes: 60
-  
+
   # 最终集：完整评测（服务器）
   final:
-    num_pairs: "all"  # 完整 1000 对
+    num_pairs: "all" # 完整 1000 对
     purpose: "论文级结果"
 
 # ============================================================
@@ -131,57 +131,57 @@ guardrails:
       absrel_max_increase_pct: 1.0
       delta1_max_decrease_pct: 1.0
       visloc_acc_max_decrease_pct: 2.0
-    
+
     # INT8 PTQ 阈值
     int8_ptq:
       absrel_max_increase_pct: 10.0
       delta1_max_decrease_pct: 3.0
       visloc_acc_max_decrease_pct: 5.0
-    
+
     # 剪枝阈值（按剪枝率调整）
     pruning:
       per_20pct_flops_reduction:
         delta1_max_decrease_pct: 2.0
         absrel_max_increase_pct: 5.0
-    
+
     # 蒸馏阈值
     distillation:
       early_training_progress_pct: 10
       min_metric_recovery_pct: 50
-  
+
   # 稳定性护栏
   stability:
-    nan_inf_rate: 0.0           # 必须为 0
-    assertion_failure_rate: 0.0  # 必须为 0
-    crash_rate: 0.0              # 必须为 0
-  
+    nan_inf_rate: 0.0 # 必须为 0
+    assertion_failure_rate: 0.0 # 必须为 0
+    crash_rate: 0.0 # 必须为 0
+
   # 性能护栏
   performance:
-    latency_must_decrease: true  # 量化/剪枝必须降低延迟
-    latency_variance_max_ratio: 2.0  # std/mean 不能超过 baseline 的 2 倍
-    vram_should_decrease: true   # 量化应该降低显存
+    latency_must_decrease: true # 量化/剪枝必须降低延迟
+    latency_variance_max_ratio: 2.0 # std/mean 不能超过 baseline 的 2 倍
+    vram_should_decrease: true # 量化应该降低显存
 
 # ============================================================
 # Schema 断言规则
 # ============================================================
 schema_assertions:
   required_output_keys:
-    - pred_pts3d_1     # 第一视角点云
-    - pred_pts3d_2     # 第二视角点云
-    - pred_conf_1      # 第一视角置信度
-    - pred_conf_2      # 第二视角置信度
-  
+  - pred_pts3d_1 # 第一视角点云
+  - pred_pts3d_2 # 第二视角点云
+  - pred_conf_1 # 第一视角置信度
+  - pred_conf_2 # 第二视角置信度
+
   allowed_dtypes:
-    - float32
-    - float16
-    - bfloat16
-  
+  - float32
+  - float16
+  - bfloat16
+
   numeric_sanity:
     depth_min: 0.0
     depth_max: 100.0
     confidence_min: 0.0
     confidence_max: 1.0
-    rotation_det_tolerance: 0.01  # |det(R) - 1| < 0.01
+    rotation_det_tolerance: 0.01 # |det(R) - 1| < 0.01
 
 # ============================================================
 # Golden Outputs 配置
@@ -189,14 +189,14 @@ schema_assertions:
 golden_outputs:
   file: "runs/BASELINE_FREEZE/golden_smoke.jsonl"
   per_sample_fields:
-    - sample_id
-    - t_err_m
-    - R_err_deg
-    - absrel
-    - rmse
-    - delta1
-    - scale_s
-  
+  - sample_id
+  - t_err_m
+  - R_err_deg
+  - absrel
+  - rmse
+  - delta1
+  - scale_s
+
   comparison_tolerance:
     fp16:
       t_err_m_rtol: 0.001
