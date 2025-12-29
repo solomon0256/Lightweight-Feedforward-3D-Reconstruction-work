@@ -124,30 +124,44 @@ validation_sets:
 # 门禁阈值（Guardrails）
 # ============================================================
 guardrails:
-  # 精度护栏
+  # 精度护栏（固定阈值，针对最终结果）
   accuracy:
-    # FP16 阈值（最严格）
+    # 蒸馏：固定阈值（针对最终结果）
+    distillation:
+      absrel_max_increase_pct: 5.0
+      delta1_max_decrease_pct: 2.0
+      visloc_acc_max_decrease_pct: 3.0
+    
+    # 量化：固定阈值（针对最终结果）
+    quantization:
+      fp16:
+        absrel_max_increase_pct: 1.0
+        delta1_max_decrease_pct: 1.0
+        visloc_acc_max_decrease_pct: 2.0
+      int8_ptq:
+        absrel_max_increase_pct: 10.0
+        delta1_max_decrease_pct: 3.0
+        visloc_acc_max_decrease_pct: 5.0
+      int8_qat:
+        absrel_max_increase_pct: 5.0
+        delta1_max_decrease_pct: 2.0
+        visloc_acc_max_decrease_pct: 3.0
+    
+    # 剪枝：固定阈值（针对最终结果）
+    pruning:
+      absrel_max_increase_pct: 8.0
+      delta1_max_decrease_pct: 3.0
+      visloc_acc_max_decrease_pct: 5.0
+    
+    # 兼容旧配置（向后兼容）
     fp16:
       absrel_max_increase_pct: 1.0
       delta1_max_decrease_pct: 1.0
       visloc_acc_max_decrease_pct: 2.0
-
-    # INT8 PTQ 阈值
     int8_ptq:
       absrel_max_increase_pct: 10.0
       delta1_max_decrease_pct: 3.0
       visloc_acc_max_decrease_pct: 5.0
-
-    # 剪枝阈值（按剪枝率调整）
-    pruning:
-      per_20pct_flops_reduction:
-        delta1_max_decrease_pct: 2.0
-        absrel_max_increase_pct: 5.0
-
-    # 蒸馏阈值
-    distillation:
-      early_training_progress_pct: 10
-      min_metric_recovery_pct: 50
 
   # 稳定性护栏
   stability:

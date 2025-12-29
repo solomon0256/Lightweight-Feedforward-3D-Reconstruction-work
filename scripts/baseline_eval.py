@@ -132,11 +132,16 @@ def create_dummy_model(device: str = 'cuda') -> nn.Module:
 
 # ============ 数据加载 ============
 
-def load_eval_pairs(pairs_list_path: str, limit: int = None):
+def load_eval_pairs(pairs_list_path: str, limit: int = None, seed: int = None):
     """
     加载评测对图列表
     
     文件格式：每行 "path_img1|path_img2"
+    
+    Args:
+        pairs_list_path: pairs列表文件路径
+        limit: 限制返回的pairs数量
+        seed: 随机种子（用于可复现的随机选择）
     """
     pairs = []
     
@@ -151,10 +156,16 @@ def load_eval_pairs(pairs_list_path: str, limit: int = None):
                 img1, img2 = line.split('|')
                 pairs.append((img1.strip(), img2.strip()))
     
+    # 如果提供了seed，使用随机选择（可复现）
+    if seed is not None:
+        import random
+        random.seed(seed)
+        random.shuffle(pairs)
+    
     if limit:
         pairs = pairs[:limit]
     
-    print(f"[INFO] Loaded {len(pairs)} image pairs")
+    print(f"[INFO] Loaded {len(pairs)} image pairs" + (f" (seed={seed})" if seed is not None else ""))
     return pairs
 
 
