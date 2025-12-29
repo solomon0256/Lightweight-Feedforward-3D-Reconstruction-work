@@ -1,0 +1,29 @@
+# 轻量化验证目标配置
+# null = 不检查该项，只输出实际值
+# 有数值 = 检查并判断 PASS/FAIL
+
+baseline:
+  params_M: 571.17
+  latency_ms: 353.07
+  vram_GB: 2.76
+  visloc_cm: 1.85
+
+targets:
+  # === 参数量目标 ===
+  params_M: null              # 目标参数量(M)
+  compression_ratio: null     # 目标压缩比 (如 0.1 表示压缩到原来的10%)
+  
+  # === 速度目标 ===
+  latency_ms: null            # 目标推理时间(ms)
+  speedup: null               # 目标加速比 (如 2.0 表示快2倍)
+  
+  # === 精度目标 ===
+  max_loss_increase: null     # 蒸馏时允许的最大loss增量
+  max_precision_drop_pct: null # 最大精度损失百分比
+  
+  # === 剪枝目标 ===
+  sparsity: null              # 目标稀疏度 (如 0.4 表示40%稀疏)
+  
+  # === 量化目标 ===
+  quant_output_valid: true    # 量化输出是否有效（非NaN/Inf）
+
