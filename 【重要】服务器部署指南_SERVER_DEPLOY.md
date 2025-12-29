@@ -1,7 +1,7 @@
 # 🚀 服务器部署与还原指南
 
-> **当前阶段**: Baseline 验证完成  
-> **最后更新**: 2025-12-23  
+> **当前阶段**: 轻量化验证脚本完成，准备服务器运行  
+> **最后更新**: 2025-12-29  
 > **状态**: ✅ 可部署
 
 ---
@@ -102,11 +102,122 @@ python scripts/test_dust3r_baseline.py --device cuda
   峰值显存: 2.77 GB
 ```
 
-### 步骤 4: 执行任务
+### 步骤 4: 本地验证（在本地工作站执行）
 
-根据当前阶段执行相应任务...
+**⚠️ 重要：在服务器运行完整轻量化前，先在本地验证代码正确性！**
 
-### 步骤 5: 保存工作
+#### 4.1 验证轻量化可行性
+
+```bash
+# 验证蒸馏、量化、剪枝能否成功运行
+python scripts/verify_lightweight_feasibility.py
+```
+
+**预期输出**:
+```
+[PASS] 蒸馏验证通过
+[PASS] 量化验证通过
+[PASS] 剪枝验证通过
+```
+
+#### 4.2 验证性能预测
+
+```bash
+# 预测轻量化后的性能指标
+python scripts/verify_performance.py
+```
+
+**预期输出**:
+```
+参数量: 285.6M (压缩比: 0.50)
+推理时间: 180ms (加速比: 1.96)
+稀疏度: 40.0%
+```
+
+#### 4.3 运行Smoke Gate和Trend Gate
+
+```bash
+# Smoke Gate: 快速正确性检查
+python scripts/smoke_gate.py
+
+# Trend Gate: 性能趋势检查
+python scripts/trend_gate.py
+```
+
+**全部通过后，推送到GitHub**:
+```bash
+git add .
+git commit -m "local validation passed"
+git push
+```
+
+### 步骤 5: 服务器运行轻量化（在服务器执行）
+
+**在服务器上克隆最新代码后，运行完整轻量化流程：**
+
+#### 5.1 蒸馏训练 (K-only)
+
+```bash
+# 完整蒸馏训练
+python scripts/train_distill.py --exp-config expconfigs/distill.yaml
+
+# 或使用dry-run快速测试（仅用于验证）
+python scripts/train_distill.py --exp-config expconfigs/distill.yaml --dry-run --max-epochs 2
+```
+
+**输出**: `outputs/checkpoints/student_fp32_best.pth`
+
+#### 5.2 量化 (Q-only 或 K→Q)
+
+```bash
+# PTQ量化（快速）
+python scripts/quantize.py --exp-config expconfigs/quant.yaml --mode ptq
+
+# QAT量化（精度更高，需要训练）
+python scripts/quantize.py --exp-config expconfigs/quant.yaml --mode qat
+
+# 如果接在蒸馏后，指定student权重
+python scripts/quantize.py --exp-config expconfigs/quant.yaml --mode ptq \
+    --model-weights outputs/checkpoints/student_fp32_best.pth
+```
+
+**输出**: `outputs/checkpoints/quantized_int8.pth`
+
+#### 5.3 剪枝 (P-only 或 K→P)
+
+```bash
+# 剪枝（使用student模型）
+python scripts/prune.py --exp-config expconfigs/prune.yaml \
+    --model-weights outputs/checkpoints/student_fp32_best.pth
+
+# 或剪枝baseline模型
+python scripts/prune.py --exp-config expconfigs/prune.yaml
+```
+
+**输出**: `outputs/checkpoints/pruned_40pct.pth`
+
+#### 5.4 联合训练 (PQK)
+
+```bash
+# 联合训练（蒸馏+量化+剪枝）
+python scripts/train_joint.py --config expconfigs/joint_pqk.yaml
+```
+
+### 步骤 6: 性能评估
+
+```bash
+# 评估轻量化后的模型性能
+python scripts/baseline_eval.py --config config/eval.yaml \
+    --model-path outputs/checkpoints/student_fp32_best.pth
+```
+
+**评估指标**:
+- 参数量 (M)
+- 推理时间 (ms)
+- VisLoc精度 (cm)
+- VRAM使用 (GB)
+
+### 步骤 7: 保存工作
 
 **任务完成后，务必保存所有结果到 GitHub！**
 
@@ -124,7 +235,7 @@ git commit -m "exp: [任务描述]"
 git push
 ```
 
-### 步骤 6: 销毁服务器
+### 步骤 8: 销毁服务器
 
 确认 `git push` 成功后，可以安全销毁服务器实例。
 
@@ -138,10 +249,14 @@ Lightweight-Feedforward-3D-Reconstruction-work/
 ├── scripts/
 │   ├── setup_server.sh       # 服务器一键设置
 │   ├── test_dust3r_baseline.py  # Baseline 验证
-│   ├── download_weights.py   # 下载模型权重
+│   ├── verify_lightweight_feasibility.py  # 轻量化可行性验证
+│   ├── verify_performance.py  # 性能预测验证
+│   ├── smoke_gate.py        # Smoke Gate验证
+│   ├── trend_gate.py         # Trend Gate验证
 │   ├── prune.py              # 剪枝脚本
 │   ├── quantize.py           # 量化脚本
-│   └── train_distill.py      # 蒸馏训练
+│   ├── train_distill.py      # 蒸馏训练
+│   └── train_joint.py        # 联合训练
 ├── third_party/
 │   └── dust3r/               # DUSt3R 代码 (submodule)
 │       └── croco/            # CRoCo 代码 (nested submodule)
@@ -159,11 +274,12 @@ Lightweight-Feedforward-3D-Reconstruction-work/
 | 阶段 | 状态 | 说明 |
 |------|------|------|
 | Phase 0: Baseline | ✅ 完成 | DUSt3R 571.2M, GPU 验证通过 |
-| Phase 1: 剪枝 | ⏳ 待开始 | - |
-| Phase 2: 量化 | ⏳ 待开始 | - |
-| Phase 3: 蒸馏 | ⏳ 待开始 | - |
-| Phase 4: 联合优化 | ⏳ 待开始 | - |
-| Phase 5: 评测 | ⏳ 待开始 | - |
+| Phase 0.5: 验证脚本 | ✅ 完成 | 轻量化验证脚本已实现并测试通过 |
+| Phase 1: 剪枝 | ✅ 脚本就绪 | `prune.py` 已实现，支持dry-run |
+| Phase 2: 量化 | ✅ 脚本就绪 | `quantize.py` 已实现，支持PTQ/QAT |
+| Phase 3: 蒸馏 | ✅ 脚本就绪 | `train_distill.py` 已实现，支持dry-run |
+| Phase 4: 联合优化 | ✅ 脚本就绪 | `train_joint.py` 已实现 |
+| Phase 5: 服务器运行 | ⏳ 待开始 | 等待在服务器上运行完整流程 |
 
 ---
 
