@@ -333,11 +333,30 @@ class DUSt3RStudent(nn.Module):
     @classmethod
     def from_config_dict(cls, config_dict: Dict[str, Any]) -> 'DUSt3RStudent':
         """从配置字典创建模型"""
+        # 确保encoder_dim能被encoder_heads整除
+        mha_ratio = config_dict.get('mha_heads_ratio', 0.8)
+        ffn_ratio = config_dict.get('ffn_ratio', 0.8)
+        
+        encoder_heads = int(12 * mha_ratio)
+        encoder_dim = int(768 * ffn_ratio)
+        
+        # 调整encoder_dim使其能被encoder_heads整除
+        head_dim = encoder_dim // encoder_heads
+        encoder_dim = head_dim * encoder_heads  # 确保整除
+        
+        # 同样处理decoder
+        decoder_heads = config_dict.get('decoder_heads', 10)
+        decoder_dim = config_dict.get('decoder_dim', 512)
+        decoder_head_dim = decoder_dim // decoder_heads
+        decoder_dim = decoder_head_dim * decoder_heads  # 确保整除
+        
         config = StudentConfig(
             encoder_layers=config_dict.get('encoder_layers', 10),
-            encoder_heads=int(12 * config_dict.get('mha_heads_ratio', 0.8)),
-            encoder_dim=int(768 * config_dict.get('ffn_ratio', 0.8)),
+            encoder_heads=encoder_heads,
+            encoder_dim=encoder_dim,
             decoder_layers=config_dict.get('decoder_layers', 6),
+            decoder_heads=decoder_heads,
+            decoder_dim=decoder_dim,
         )
         return cls(config=config)
 
