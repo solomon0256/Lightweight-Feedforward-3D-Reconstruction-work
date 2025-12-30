@@ -553,6 +553,10 @@ def load_teacher_model(weights_path: str = None, device: str = 'cuda') -> nn.Mod
             print(f"[INFO] Loading Teacher from local weights: {weights_path}")
             # 这里需要根据实际权重格式调整加载方式
             model = AsymmetricCroCo3DStereo.from_pretrained(weights_path)
+        elif weights_path and weights_path.strip() and weights_path != "null":
+            # 权重路径指定但文件不存在，尝试作为HuggingFace模型名
+            print(f"[INFO] Local weights not found, trying as HuggingFace model: {weights_path}")
+            model = AsymmetricCroCo3DStereo.from_pretrained(weights_path)
         else:
             # 从HuggingFace加载（默认方式）
             model_name = 'naver/DUSt3R_ViTLarge_BaseDecoder_512_dpt'
@@ -714,6 +718,24 @@ def main():
     if args.dry_run:
         max_epochs = min(max_epochs, 2)
     
+    # 发送实验开始通知
+    try:
+        from scripts.experiment_notifier import notify_completion
+        notify_completion(
+            "K-only_real_data",
+            "running",
+            {
+                "message": "实验开始训练",
+                "train_samples": len(train_dataset),
+                "val_samples": len(val_dataset),
+                "teacher_params": f"{sum(p.numel() for p in teacher.parameters())/1e6:.2f}M",
+                "student_params": f"{sum(p.numel() for p in student.parameters())/1e6:.2f}M",
+                "max_epochs": max_epochs,
+            }
+        )
+    except Exception as e:
+        print(f"[WARN] 通知发送失败: {e}")
+    
     start_time = datetime.now()
     history = trainer.train(max_epochs=max_epochs)
     elapsed_hours = (datetime.now() - start_time).total_seconds() / 3600
@@ -776,6 +798,25 @@ def main():
     print(f"  JSON log: {output_paths['json']}")
     print(f"  GPU hours: {elapsed_hours:.2f}h")
     print("=" * 60)
+    
+    # 发送实验完成通知
+    try:
+        from scripts.experiment_notifier import notify_completion
+        best_loss = min([h.get('val_loss', float('inf')) for h in history])
+        notify_completion(
+            "K-only_real_data",
+            "success",
+            {
+                "message": "实验训练完成",
+                "best_val_loss": f"{best_loss:.6f}",
+                "total_epochs": len(history),
+                "elapsed_hours": f"{elapsed_hours:.2f}",
+                "checkpoint": str(config.paths.checkpoints / 'student_fp32_best.pth'),
+                "log_file": str(output_paths['json']),
+            }
+        )
+    except Exception as e:
+        print(f"[WARN] 完成通知发送失败: {e}")
     
     return 0
 
