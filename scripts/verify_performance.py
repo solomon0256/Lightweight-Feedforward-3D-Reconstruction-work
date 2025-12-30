@@ -117,15 +117,16 @@ def quick_accuracy_test(model: nn.Module, img1: torch.Tensor, img2: torch.Tensor
             else:
                 output = model(img1, img2)
         
-        # 简单检查输出是否合理
+        # 简单检查输出是否合理（参考verify_lightweight_feasibility.py的实现）
         if isinstance(output, dict):
-            output_tensor = output.get('pts3d') or output.get('depth')
+            output_tensor = output.get('pts3d')
             if output_tensor is None:
-                output_tensor = list(output.values())[0]
+                # 尝试其他键
+                output_tensor = output.get('depth') or list(output.values())[0]
         else:
             output_tensor = output
         
-        # 检查数值范围
+        # 检查数值范围（直接使用，不转换，与verify_lightweight_feasibility.py一致）
         if output_tensor.numel() > 0:
             has_nan = torch.isnan(output_tensor).any().item()
             has_inf = torch.isinf(output_tensor).any().item()
@@ -283,27 +284,36 @@ def verify_quantization_performance(device: str = 'cuda',
         print("  加载baseline模型...")
         baseline_model = load_dust3r_model(device=device)
         
-        # 3. 应用FP16量化
-        print("  应用FP16量化...")
-        quantized_model = baseline_model.half()
+        # 3. 应用INT8动态量化（实际量化方法，DUSt3R不支持FP16）
+        print("  应用动态量化（INT8）...")
+        # 量化模型只能在CPU上运行（PyTorch限制）
+        original_device = next(baseline_model.parameters()).device
+        model_cpu = baseline_model.cpu()
+        # 只量化Linear层，避免Conv层的问题
+        quantized_model = torch.quantization.quantize_dynamic(
+            model_cpu,
+            {torch.nn.Linear},
+            dtype=torch.qint8
+        )
+        # 量化后的模型必须保持在CPU上
         
         # 4. 参数量（不变）
         total_params, _ = count_parameters(quantized_model)
         params_M = total_params / 1e6
         print(f"  参数量: {params_M:.2f}M (与baseline相同)")
         
-        # 5. 创建虚拟输入
-        img1 = torch.randn(1, 3, 512, 384).to(device).half()
-        img2 = torch.randn(1, 3, 512, 384).to(device).half()
+        # 5. 创建虚拟输入（CPU上）
+        img1 = torch.randn(1, 3, 512, 384)
+        img2 = torch.randn(1, 3, 512, 384)
         
-        # 6. 测量推理速度（DUSt3R模型需要view格式）
+        # 6. 测量推理速度（量化模型在CPU上，需要view格式）
         print("  测量推理速度...")
-        latency_ms = measure_inference_time(quantized_model, img1, img2, device=device, is_dust3r=True)
+        latency_ms = measure_inference_time(quantized_model, img1, img2, device='cpu', is_dust3r=True)
         print(f"  推理时间: {latency_ms:.2f}ms")
         
         # 7. 快速精度测试
         print("  快速精度测试（1个样本，仅供参考）...")
-        accuracy_result = quick_accuracy_test(quantized_model, img1, img2, device=device, is_dust3r=True)
+        accuracy_result = quick_accuracy_test(quantized_model, img1, img2, device='cpu', is_dust3r=True)
         print(f"  {accuracy_result['message']}")
         
         # 8. 加载baseline

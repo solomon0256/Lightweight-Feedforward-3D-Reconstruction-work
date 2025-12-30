@@ -305,12 +305,39 @@ class DistillationTrainer:
             img2 = batch['img2'].to(self.device)
             gt = {k: v.to(self.device) for k, v in batch.items() if k.startswith('gt_')}
             
+            # 构造DUSt3R需要的view格式
+            view1 = {
+                'img': img1,
+                'instance': [f'0_{i}' for i in range(img1.shape[0])],
+                'idx': list(range(img1.shape[0]))
+            }
+            view2 = {
+                'img': img2,
+                'instance': [f'1_{i}' for i in range(img2.shape[0])],
+                'idx': list(range(img2.shape[0]))
+            }
+            
             # Teacher 前向（不计算梯度）
             with torch.no_grad():
-                teacher_out = self.teacher(img1, img2, return_features=True)
+                teacher_res1, teacher_res2 = self.teacher(view1, view2)
+                # 提取输出（DUSt3R返回字典）
+                teacher_out = {
+                    'pts3d': teacher_res1.get('pts3d', teacher_res1.get('pts3d_in_other_view')),
+                    'depth': teacher_res1.get('depth'),
+                    'conf': teacher_res1.get('conf')
+                }
             
-            # Student 前向
-            student_out = self.student(img1, img2, return_features=True)
+            # Student 前向（Student模型可能有不同的接口）
+            if hasattr(self.student, 'forward') and 'return_features' in self.student.forward.__code__.co_varnames:
+                student_out = self.student(img1, img2, return_features=True)
+            else:
+                # 如果Student也使用view格式
+                student_res1, student_res2 = self.student(view1, view2)
+                student_out = {
+                    'pts3d': student_res1.get('pts3d', student_res1.get('pts3d_in_other_view')),
+                    'depth': student_res1.get('depth'),
+                    'conf': student_res1.get('conf')
+                }
             
             # 计算损失
             losses = self.criterion(student_out, teacher_out, gt)
@@ -349,8 +376,36 @@ class DistillationTrainer:
             img2 = batch['img2'].to(self.device)
             gt = {k: v.to(self.device) for k, v in batch.items() if k.startswith('gt_')}
             
-            teacher_out = self.teacher(img1, img2, return_features=True)
-            student_out = self.student(img1, img2, return_features=True)
+            # 构造DUSt3R需要的view格式
+            view1 = {
+                'img': img1,
+                'instance': [f'0_{i}' for i in range(img1.shape[0])],
+                'idx': list(range(img1.shape[0]))
+            }
+            view2 = {
+                'img': img2,
+                'instance': [f'1_{i}' for i in range(img2.shape[0])],
+                'idx': list(range(img2.shape[0]))
+            }
+            
+            # Teacher 前向
+            teacher_res1, teacher_res2 = self.teacher(view1, view2)
+            teacher_out = {
+                'pts3d': teacher_res1.get('pts3d', teacher_res1.get('pts3d_in_other_view')),
+                'depth': teacher_res1.get('depth'),
+                'conf': teacher_res1.get('conf')
+            }
+            
+            # Student 前向
+            if hasattr(self.student, 'forward') and 'return_features' in self.student.forward.__code__.co_varnames:
+                student_out = self.student(img1, img2, return_features=True)
+            else:
+                student_res1, student_res2 = self.student(view1, view2)
+                student_out = {
+                    'pts3d': student_res1.get('pts3d', student_res1.get('pts3d_in_other_view')),
+                    'depth': student_res1.get('depth'),
+                    'conf': student_res1.get('conf')
+                }
             
             losses = self.criterion(student_out, teacher_out, gt)
             total_loss += losses['total'].item()
@@ -460,22 +515,64 @@ class DistillationTrainer:
 
 # ============ Teacher 加载 ============
 
-def load_teacher_model(weights_path: str, device: str = 'cuda') -> nn.Module:
-    """加载 Teacher 模型"""
-    # 尝试从 dust3r 包加载
+def setup_dust3r_paths():
+    """设置 DUSt3R 和 CroCo 路径"""
+    dust3r_path = SCRIPT_DIR.parent / 'third_party' / 'dust3r'
+    croco_path = dust3r_path / 'croco'
+    
+    # 确保 croco/models/__init__.py 存在
+    croco_models_init = croco_path / 'models' / '__init__.py'
+    if not croco_models_init.exists():
+        croco_models_init.parent.mkdir(parents=True, exist_ok=True)
+        croco_models_init.touch()
+    
+    # 添加到 sys.path
+    for p in [str(dust3r_path), str(croco_path)]:
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+
+def load_teacher_model(weights_path: str = None, device: str = 'cuda') -> nn.Module:
+    """
+    加载 Teacher 模型（真实的DUSt3R模型）
+    
+    Args:
+        weights_path: 权重路径（可选，如果为None则从HuggingFace加载）
+        device: 设备
+    
+    Returns:
+        加载好的Teacher模型
+    """
+    setup_dust3r_paths()
+    
     try:
         from dust3r.model import AsymmetricCroCo3DStereo
-        from dust3r.inference import load_model
         
-        model = load_model(weights_path, device=device)
+        # 如果提供了权重路径且文件存在，从本地加载
+        if weights_path and Path(weights_path).exists():
+            print(f"[INFO] Loading Teacher from local weights: {weights_path}")
+            # 这里需要根据实际权重格式调整加载方式
+            model = AsymmetricCroCo3DStereo.from_pretrained(weights_path)
+        else:
+            # 从HuggingFace加载（默认方式）
+            model_name = 'naver/DUSt3R_ViTLarge_BaseDecoder_512_dpt'
+            print(f"[INFO] Loading Teacher from HuggingFace: {model_name}")
+            model = AsymmetricCroCo3DStereo.from_pretrained(model_name)
+        
+        model = model.to(device)
+        model.eval()
+        
+        params = sum(p.numel() for p in model.parameters())
+        print(f"[INFO] Teacher model loaded: {params/1e6:.2f}M parameters")
+        
         return model
-    except ImportError:
-        pass
-    
-    # 使用 Student 架构作为 Teacher（用于测试）
-    print("[WARN] Using Student-L as dummy Teacher")
-    model = create_student_model(arch='dust3r_student_l', device=device)
-    return model
+    except Exception as e:
+        import traceback
+        print(f"[WARN] Failed to load real DUSt3R Teacher: {e}")
+        traceback.print_exc()
+        print("[WARN] Using Student-L as dummy Teacher for testing")
+        model = create_student_model(arch='dust3r_student_l', device=device)
+        return model
 
 
 # ============ 主函数 ============
@@ -566,15 +663,12 @@ def main():
     
     print(f"[INFO] Train samples: {len(train_dataset)}, Val samples: {len(val_dataset)}")
     
-    # 加载 Teacher
+    # 加载 Teacher（使用真实的DUSt3R模型）
     teacher_cfg = config.experiment.get('teacher', {})
     teacher_weights = args.teacher_weights or teacher_cfg.get('weights')
     
-    if teacher_weights and Path(teacher_weights).exists():
-        teacher = load_teacher_model(teacher_weights, device)
-    else:
-        print("[WARN] No teacher weights, using dummy Teacher")
-        teacher = create_student_model(arch='dust3r_student_l', device=device)
+    print("[INFO] Loading Teacher model (real DUSt3R from HuggingFace)...")
+    teacher = load_teacher_model(weights_path=teacher_weights, device=device)
     
     # 创建 Student
     student_cfg = config.experiment.get('student', {})
@@ -587,13 +681,23 @@ def main():
         device=device,
     )
     
-    # 打印模型统计
+    # 打印模型统计（跳过FLOPs计算以避免trace错误）
     print("\n[INFO] Model Statistics:")
-    teacher_stats = get_model_stats(teacher, config.input_shape, device, measure_vram_flag=False)
-    student_stats = get_model_stats(student, config.input_shape, device, measure_vram_flag=False)
-    print(f"  Teacher: {teacher_stats}")
-    print(f"  Student: {student_stats}")
-    print(f"  Compression: {student_stats.params_M / teacher_stats.params_M * 100:.1f}% params")
+    try:
+        teacher_stats = get_model_stats(teacher, config.input_shape, device, measure_vram_flag=False)
+        student_stats = get_model_stats(student, config.input_shape, device, measure_vram_flag=False)
+        print(f"  Teacher: {teacher_stats}")
+        print(f"  Student: {student_stats}")
+        print(f"  Compression: {student_stats.params_M / teacher_stats.params_M * 100:.1f}% params")
+    except Exception as e:
+        # 如果FLOPs计算失败，只计算参数量
+        from scripts.utils.model_stats import count_parameters
+        teacher_params, _ = count_parameters(teacher)
+        student_params, _ = count_parameters(student)
+        print(f"  Teacher: {teacher_params/1e6:.2f}M parameters")
+        print(f"  Student: {student_params/1e6:.2f}M parameters")
+        print(f"  Compression: {student_params / teacher_params * 100:.1f}% params")
+        print(f"  [WARN] FLOPs calculation skipped due to: {type(e).__name__}")
     
     # 创建训练器
     trainer = DistillationTrainer(
