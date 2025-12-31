@@ -28,16 +28,17 @@ teacher:
   eval_fp16: true # 推理半精度以提速（不影响作为蒸馏"老师"的目标）
 
 student:
-  # Student-S配置（与最终方案对齐）
+  # Student-S配置（修复RoPE维度约束后的配置）
+  # 使用: 9层encoder, 8头, 512维 (head_dim=64, 满足RoPE约束)
   arch: "dust3r_student_s"
   student_config:
-    encoder_layers: 17
-    encoder_heads: 12
-    encoder_dim: 720
+    encoder_layers: 9
+    encoder_heads: 8
+    encoder_dim: 512
     encoder_ffn_ratio: 4.0
-    decoder_layers: 8
-    decoder_heads: 9
-    decoder_dim: 540
+    decoder_layers: 6
+    decoder_heads: 8
+    decoder_dim: 512
     decoder_ffn_ratio: 4.0
     patch_size: 16
     img_size: [512, 384]
