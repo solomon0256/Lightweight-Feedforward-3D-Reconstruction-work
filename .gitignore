@@ -85,3 +85,7 @@ docs/论文相关文献/*.pdf
 *.tmp
 *.temp
 *.log
+
+# ============ Markdown文件（不上传GitHub）============
+*.md
+docs/**/*.md
