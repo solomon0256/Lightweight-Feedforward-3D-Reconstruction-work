@@ -7,12 +7,52 @@ Student 模型架构定义
 - 自定义缩放配置
 """
 
+import sys
+from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Optional, Tuple, Any
 from dataclasses import dataclass
 from copy import deepcopy
+from functools import partial
+
+# 设置路径以导入Teacher的类
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _SCRIPT_DIR.parent.parent
+_dust3r_path = _PROJECT_ROOT / 'third_party' / 'dust3r'
+_croco_path = _dust3r_path / 'croco'
+
+# 确保 croco/models/__init__.py 存在
+_croco_models_init = _croco_path / 'models' / '__init__.py'
+if not _croco_models_init.exists():
+    _croco_models_init.parent.mkdir(parents=True, exist_ok=True)
+    _croco_models_init.touch()
+
+# 添加到 sys.path（顺序很重要：croco必须在dust3r之前，因为models在croco下）
+for p in [str(_croco_path), str(_dust3r_path)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+# 导入Teacher的类（与Teacher完全一致）
+# 注意：使用绝对导入路径避免与scripts.models冲突
+import importlib.util
+_blocks_path = _croco_path / 'models' / 'blocks.py'
+_pos_embed_path = _croco_path / 'models' / 'pos_embed.py'
+
+# 动态加载blocks模块
+_spec_blocks = importlib.util.spec_from_file_location("croco_blocks", _blocks_path)
+_croco_blocks = importlib.util.module_from_spec(_spec_blocks)
+_spec_blocks.loader.exec_module(_croco_blocks)
+Block = _croco_blocks.Block
+DecoderBlock = _croco_blocks.DecoderBlock
+PatchEmbed = _croco_blocks.PatchEmbed
+
+# 动态加载pos_embed模块
+_spec_pos = importlib.util.spec_from_file_location("croco_pos_embed", _pos_embed_path)
+_croco_pos = importlib.util.module_from_spec(_spec_pos)
+_spec_pos.loader.exec_module(_croco_pos)
+RoPE2D = _croco_pos.RoPE2D
 
 
 @dataclass
@@ -42,18 +82,20 @@ class StudentConfig:
         Args:
             scale: 's' (small, -30%), 'm' (medium, -20%), 'l' (large, -10%)
         """
+        # 注意：RoPE要求 head_dim 必须是偶数，且 head_dim/2 >= max_position(32)
+        # Teacher: enc_dim=1024, enc_heads=16 → head_dim=64; dec_dim=768, dec_heads=12 → head_dim=64
         presets = {
             's': cls(
-                encoder_layers=9, encoder_heads=9, encoder_dim=540,  # 540 // 9 = 60 ✓
-                decoder_layers=6, decoder_heads=8, decoder_dim=432,  # 432 // 8 = 54 ✓
+                encoder_layers=9, encoder_heads=8, encoder_dim=512,   # 512 // 8 = 64 ✓
+                decoder_layers=6, decoder_heads=8, decoder_dim=512,   # 512 // 8 = 64 ✓
             ),
             'm': cls(
-                encoder_layers=10, encoder_heads=10, encoder_dim=640,  # 640 // 10 = 64 ✓
-                decoder_layers=7, decoder_heads=10, decoder_dim=512,  # 512 // 10 = 51.2 ✗ → 510
+                encoder_layers=12, encoder_heads=8, encoder_dim=512,  # 512 // 8 = 64 ✓
+                decoder_layers=8, decoder_heads=8, decoder_dim=512,   # 512 // 8 = 64 ✓
             ),
             'l': cls(
-                encoder_layers=11, encoder_heads=11, encoder_dim=704,  # 704 // 11 = 64 ✓
-                decoder_layers=7, decoder_heads=11, decoder_dim=572,  # 572 // 11 = 52 ✓ (原576不能整除)
+                encoder_layers=16, encoder_heads=12, encoder_dim=768, # 768 // 12 = 64 ✓
+                decoder_layers=8, decoder_heads=12, decoder_dim=768,  # 768 // 12 = 64 ✓
             ),
         }
         # 确保所有配置的dim都能被heads整除
@@ -71,210 +113,67 @@ class StudentConfig:
         return presets.get(scale, cls())
 
 
-class MultiHeadAttention(nn.Module):
-    """多头注意力（支持可变头数）"""
-    
-    def __init__(self, dim: int, num_heads: int, dropout: float = 0.0):
-        super().__init__()
-        self.num_heads = num_heads
-        self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
-        
-        self.qkv = nn.Linear(dim, dim * 3)
-        self.proj = nn.Linear(dim, dim)
-        self.dropout = nn.Dropout(dropout)
-    
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        B, N, C = x.shape
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]
-        
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        if mask is not None:
-            attn = attn.masked_fill(mask == 0, float('-inf'))
-        attn = attn.softmax(dim=-1)
-        attn = self.dropout(attn)
-        
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
-        x = self.proj(x)
-        return x
-
-
-class CrossAttention(nn.Module):
-    """交叉注意力（用于Decoder中两个view之间的信息交换）"""
-    
-    def __init__(self, dim: int, num_heads: int, dropout: float = 0.0):
-        super().__init__()
-        self.num_heads = num_heads
-        self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
-        
-        self.q = nn.Linear(dim, dim)
-        self.kv = nn.Linear(dim, dim * 2)
-        self.proj = nn.Linear(dim, dim)
-        self.dropout = nn.Dropout(dropout)
-    
-    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: query (B, N1, D)
-            y: key/value (B, N2, D)
-        Returns:
-            out: (B, N1, D)
-        """
-        B, N1, C = x.shape
-        N2 = y.shape[1]
-        
-        q = self.q(x).reshape(B, N1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-        kv = self.kv(y).reshape(B, N2, 2, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
-        k, v = kv[0], kv[1]
-        
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1)
-        attn = self.dropout(attn)
-        
-        x = (attn @ v).permute(0, 2, 1, 3).reshape(B, N1, C)
-        x = self.proj(x)
-        return x
-
-
-class DecoderBlock(nn.Module):
-    """Decoder块（包含self-attention和cross-attention）"""
-    
-    def __init__(self, dim: int, num_heads: int, ffn_ratio: float = 4.0, dropout: float = 0.0):
-        super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
-        self.self_attn = MultiHeadAttention(dim, num_heads, dropout)
-        self.norm2 = nn.LayerNorm(dim)
-        self.cross_attn = CrossAttention(dim, num_heads, dropout)
-        self.norm3 = nn.LayerNorm(dim)
-        self.ffn = FFN(dim, ffn_ratio, dropout)
-    
-    def forward(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Args:
-            x: 当前view的特征 (B, N1, D)
-            y: 另一个view的特征 (B, N2, D)
-        Returns:
-            x: 更新后的当前view特征
-            y: 另一个view特征（不变）
-        """
-        # Self-attention
-        x = x + self.self_attn(self.norm1(x))
-        # Cross-attention
-        x = x + self.cross_attn(self.norm2(x), y)
-        # FFN
-        x = x + self.ffn(self.norm3(x))
-        return x, y
-
-
-class FFN(nn.Module):
-    """前馈网络"""
-    
-    def __init__(self, dim: int, ffn_ratio: float = 4.0, dropout: float = 0.0):
-        super().__init__()
-        hidden_dim = int(dim * ffn_ratio)
-        self.fc1 = nn.Linear(dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, dim)
-        self.dropout = nn.Dropout(dropout)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = F.gelu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)
-        x = self.dropout(x)
-        return x
-
-
-class TransformerBlock(nn.Module):
-    """Transformer 块"""
-    
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int,
-        ffn_ratio: float = 4.0,
-        dropout: float = 0.0,
-    ):
-        super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
-        self.attn = MultiHeadAttention(dim, num_heads, dropout)
-        self.norm2 = nn.LayerNorm(dim)
-        self.ffn = FFN(dim, ffn_ratio, dropout)
-    
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x = x + self.attn(self.norm1(x), mask)
-        x = x + self.ffn(self.norm2(x))
-        return x
-
-
-class PatchEmbed(nn.Module):
-    """图像分块嵌入"""
-    
-    def __init__(
-        self,
-        img_size: Tuple[int, int] = (512, 384),
-        patch_size: int = 16,
-        in_channels: int = 3,
-        embed_dim: int = 768,
-    ):
-        super().__init__()
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.num_patches = (img_size[0] // patch_size) * (img_size[1] // patch_size)
-        
-        self.proj = nn.Conv2d(
-            in_channels, embed_dim,
-            kernel_size=patch_size, stride=patch_size
-        )
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, C, H, W) -> (B, N, D)
-        x = self.proj(x)  # (B, D, H/P, W/P)
-        x = x.flatten(2).transpose(1, 2)  # (B, N, D)
-        return x
+# 注意：不再需要自定义的MultiHeadAttention、CrossAttention、DecoderBlock、TransformerBlock、FFN、PatchEmbed
+# 因为我们现在直接使用Teacher的类（Block, DecoderBlock, PatchEmbed），它们已包含RoPE支持
 
 
 class DUSt3RStudentEncoder(nn.Module):
-    """DUSt3R Student 编码器"""
+    """DUSt3R Student 编码器（使用Teacher的Block和RoPE）"""
     
     def __init__(self, config: StudentConfig):
         super().__init__()
         self.config = config
         
+        # 使用Teacher的PatchEmbed（返回x, pos）
         self.patch_embed = PatchEmbed(
             img_size=config.img_size,
             patch_size=config.patch_size,
+            in_chans=3,
             embed_dim=config.encoder_dim,
+            norm_layer=None,
+            flatten=True
         )
         
-        num_patches = self.patch_embed.num_patches
+        # 初始化RoPE（与Teacher一致，使用RoPE100）
+        self.rope = RoPE2D(freq=100.0)
         
-        # 删除CLS token和可学习位置编码（与Teacher对齐，使用RoPE）
-        # 注意：RoPE在attention中应用，这里不需要显式位置编码
-        
+        # 使用Teacher的Block类（包含RoPE支持）
+        norm_layer = partial(nn.LayerNorm, eps=1e-6)
         self.blocks = nn.ModuleList([
-            TransformerBlock(
+            Block(
                 dim=config.encoder_dim,
                 num_heads=config.encoder_heads,
-                ffn_ratio=config.encoder_ffn_ratio,
+                mlp_ratio=config.encoder_ffn_ratio,
+                qkv_bias=True,
+                drop=0.0,
+                attn_drop=0.0,
+                drop_path=0.0,
+                act_layer=nn.GELU,
+                norm_layer=norm_layer,
+                rope=self.rope
             )
             for _ in range(config.encoder_layers)
         ])
         
-        self.norm = nn.LayerNorm(config.encoder_dim)
+        self.norm = norm_layer(config.encoder_dim)
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B = x.shape[0]
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            x: (B, C, H, W)
+        Returns:
+            x: (B, N, D) - 编码特征
+            pos: (B, N, 2) - 位置信息
+        """
+        # PatchEmbed返回 (x, pos)
+        x, pos = self.patch_embed(x)  # x: (B, N, D), pos: (B, N, 2)
         
-        x = self.patch_embed(x)  # (B, N, D)
-        # 不使用CLS token和位置编码（RoPE在attention中应用）
-        
+        # 使用Teacher的Block（需要传递pos）
         for block in self.blocks:
-            x = block(x)
+            x = block(x, pos)
         
         x = self.norm(x)
-        return x
+        return x, pos
 
 
 class DUSt3RStudent(nn.Module):
@@ -299,17 +198,29 @@ class DUSt3RStudent(nn.Module):
         # Decoder投影层
         self.decoder_embed = nn.Linear(config.encoder_dim, config.decoder_dim)
         
-        # 两个独立Decoder（使用deepcopy，与Teacher对齐）
+        # 初始化RoPE（Decoder也使用相同的RoPE）
+        self.rope = RoPE2D(freq=100.0)
+        
+        # 使用Teacher的DecoderBlock类（包含RoPE和CrossAttention支持）
+        norm_layer = partial(nn.LayerNorm, eps=1e-6)
         self.dec_blocks = nn.ModuleList([
             DecoderBlock(
                 dim=config.decoder_dim,
                 num_heads=config.decoder_heads,
-                ffn_ratio=config.decoder_ffn_ratio,
+                mlp_ratio=config.decoder_ffn_ratio,
+                qkv_bias=True,
+                drop=0.0,
+                attn_drop=0.0,
+                drop_path=0.0,
+                act_layer=nn.GELU,
+                norm_layer=norm_layer,
+                norm_mem=True,
+                rope=self.rope
             )
             for _ in range(config.decoder_layers)
         ])
         self.dec_blocks2 = deepcopy(self.dec_blocks)  # 第二个独立Decoder
-        self.dec_norm = nn.LayerNorm(config.decoder_dim)
+        self.dec_norm = norm_layer(config.decoder_dim)
         
         # 输出头：预测每个patch的3D点（两个独立头）
         self.head1 = nn.Linear(config.decoder_dim, config.patch_size ** 2 * 3)
@@ -338,23 +249,26 @@ class DUSt3RStudent(nn.Module):
         img1 = view1['img']
         img2 = view2['img']
         
-        # 1. 编码两张图像（共享Encoder）
-        enc_feat1 = self.encoder(img1)  # (B, N, D)
-        enc_feat2 = self.encoder(img2)   # (B, N, D)
+        # 1. 编码两张图像（共享Encoder，返回特征和位置）
+        enc_feat1, pos1 = self.encoder(img1)  # (B, N, D), (B, N, 2)
+        enc_feat2, pos2 = self.encoder(img2)   # (B, N, D), (B, N, 2)
         
         # 2. Decoder投影
         dec_feat1 = self.decoder_embed(enc_feat1)  # (B, N, decoder_dim)
         dec_feat2 = self.decoder_embed(enc_feat2)  # (B, N, decoder_dim)
         
         # 3. Decoder处理（两个独立Decoder，通过cross-attention交换信息）
-        dec_out1 = dec_feat1
-        dec_out2 = dec_feat2
+        # DecoderBlock需要传递位置信息: (x, y, xpos, ypos)
+        # 关键：同一层内，两个block都使用上一层的输出（与Teacher对齐）
+        prev_out1, prev_out2 = dec_feat1, dec_feat2
         
         for blk1, blk2 in zip(self.dec_blocks, self.dec_blocks2):
-            # Decoder1: view1的特征，cross-attention到view2
-            dec_out1, _ = blk1(dec_out1, dec_out2)
-            # Decoder2: view2的特征，cross-attention到view1
-            dec_out2, _ = blk2(dec_out2, dec_out1)
+            # Decoder1: view1的特征，cross-attention到view2（使用上一层的输出）
+            dec_out1, _ = blk1(prev_out1, prev_out2, pos1, pos2)
+            # Decoder2: view2的特征，cross-attention到view1（使用上一层的输出）
+            dec_out2, _ = blk2(prev_out2, prev_out1, pos2, pos1)
+            # 更新为当前层输出，供下一层使用
+            prev_out1, prev_out2 = dec_out1, dec_out2
         
         dec_out1 = self.dec_norm(dec_out1)  # (B, N, decoder_dim)
         dec_out2 = self.dec_norm(dec_out2)

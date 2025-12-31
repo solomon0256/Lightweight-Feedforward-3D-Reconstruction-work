@@ -104,9 +104,19 @@ class ExperimentConfig:
         # 2. 加载实验配置（可选）
         exp_cfg = {}
         if exp_config_name:
-            exp_path = paths.expconfigs / exp_config_name
+            # 支持完整路径或仅文件名
+            exp_config_path = Path(exp_config_name)
+            if exp_config_path.is_absolute() or exp_config_path.exists():
+                # 如果是绝对路径或已存在的相对路径，直接使用
+                exp_path = exp_config_path if exp_config_path.is_absolute() else paths.root / exp_config_path
+            else:
+                # 否则在expconfigs目录下查找
+                exp_path = paths.expconfigs / exp_config_path.name
+            
             if exp_path.exists():
                 exp_cfg = load_yaml(exp_path)
+            else:
+                print(f"[WARN] Experiment config not found: {exp_path}")
         
         # 3. 应用覆盖
         if overrides:

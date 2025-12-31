@@ -14,6 +14,7 @@
 
 import argparse
 import sys
+import os
 import json
 import random
 from pathlib import Path
@@ -24,6 +25,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 
 # 添加项目根目录到路径
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -266,7 +270,7 @@ class DistillationLoss(nn.Module):
 # ============ 训练器 ============
 
 class DistillationTrainer:
-    """蒸馏训练器"""
+    """蒸馏训练器（支持DDP分布式训练）"""
     
     def __init__(
         self,
@@ -276,9 +280,18 @@ class DistillationTrainer:
         val_loader: DataLoader,
         config: ExperimentConfig,
         device: str = 'cuda',
+        is_distributed: bool = False,
+        is_main: bool = True,
+        train_sampler: DistributedSampler = None,
     ):
-        self.student = student.to(device)
-        self.teacher = teacher.to(device)
+        # DDP相关
+        self.is_distributed = is_distributed
+        self.is_main = is_main
+        self.train_sampler = train_sampler
+        
+        # 模型已经在正确的设备上（DDP包装时已指定device_ids）
+        self.student = student
+        self.teacher = teacher
         self.teacher.eval()  # Teacher 不更新
         
         self.train_loader = train_loader
@@ -304,10 +317,14 @@ class DistillationTrainer:
         
         # 优化器
         optim_cfg = config.experiment.get('optim', {})
+        lr = optim_cfg.get('lr', 2e-4)
+        if isinstance(lr, str):
+            lr = float(lr)
+        
         self.optimizer = torch.optim.AdamW(
             self.student.parameters(),
-            lr=optim_cfg.get('lr', 2e-4),
-            weight_decay=optim_cfg.get('weight_decay', 0.01),
+            lr=lr,
+            weight_decay=float(optim_cfg.get('weight_decay', 0.01)),
         )
         
         # 学习率调度器
@@ -475,10 +492,13 @@ class DistillationTrainer:
             self.criterion.update_weights(alpha=alpha, beta=beta, gamma=gamma)
     
     def save_checkpoint(self, epoch: int, is_best: bool = False):
-        """保存检查点"""
+        """保存检查点（DDP模型需要用.module获取原始模型）"""
+        # 获取原始模型state_dict（DDP包装后需要访问.module）
+        raw_student = self.student.module if self.is_distributed else self.student
+        
         state = {
             'epoch': epoch,
-            'student_state_dict': self.student.state_dict(),
+            'student_state_dict': raw_student.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'best_val_loss': self.best_val_loss,
         }
@@ -490,7 +510,7 @@ class DistillationTrainer:
         if is_best:
             torch.save(state, self.ckpt_dir / 'student_best.pth')
             # 单独保存模型（方便加载）
-            torch.save(self.student.state_dict(), self.ckpt_dir / 'student_fp32_best.pth')
+            torch.save(raw_student.state_dict(), self.ckpt_dir / 'student_fp32_best.pth')
     
     def train(self, max_epochs: Optional[int] = None) -> Dict[str, Any]:
         """
@@ -508,15 +528,21 @@ class DistillationTrainer:
             'lr': [],
         }
         
-        print(f"\n{'='*60}")
-        print("Starting Distillation Training")
-        print(f"{'='*60}")
-        print(f"  Max epochs: {self.max_epochs}")
-        print(f"  Early stop patience: {self.early_stop_patience}")
-        print(f"  Initial beta: {self.criterion.beta}")
-        print(f"{'='*60}\n")
+        if self.is_main:
+            print(f"\n{'='*60}")
+            print("Starting Distillation Training")
+            print(f"{'='*60}")
+            print(f"  Max epochs: {self.max_epochs}")
+            print(f"  Early stop patience: {self.early_stop_patience}")
+            print(f"  Initial beta: {self.criterion.beta}")
+            print(f"  Distributed: {self.is_distributed}")
+            print(f"{'='*60}\n")
         
         for epoch in range(self.max_epochs):
+            # DDP: 设置sampler的epoch以确保每个epoch数据打乱不同
+            if self.is_distributed and self.train_sampler is not None:
+                self.train_sampler.set_epoch(epoch)
+            
             # 更新课程参数
             self.update_curriculum(epoch)
             
@@ -537,12 +563,13 @@ class DistillationTrainer:
             history['val_loss'].append(val_metrics['val_loss'])
             history['lr'].append(current_lr)
             
-            # 打印进度
-            print(f"Epoch {epoch+1}/{self.max_epochs} | "
-                  f"Train: {train_metrics['loss']:.4f} | "
-                  f"Val: {val_metrics['val_loss']:.4f} | "
-                  f"LR: {current_lr:.2e} | "
-                  f"β: {self.criterion.beta:.2f}")
+            # 打印进度（仅主进程）
+            if self.is_main:
+                print(f"Epoch {epoch+1}/{self.max_epochs} | "
+                      f"Train: {train_metrics['loss']:.4f} | "
+                      f"Val: {val_metrics['val_loss']:.4f} | "
+                      f"LR: {current_lr:.2e} | "
+                      f"β: {self.criterion.beta:.2f}")
             
             # 检查是否最佳
             is_best = val_metrics['val_loss'] < self.best_val_loss
@@ -552,12 +579,14 @@ class DistillationTrainer:
             else:
                 self.no_improve_count += 1
             
-            # 保存检查点
-            self.save_checkpoint(epoch, is_best)
+            # 保存检查点（仅主进程）
+            if self.is_main:
+                self.save_checkpoint(epoch, is_best)
             
             # 早停检查
             if self.no_improve_count >= self.early_stop_patience:
-                print(f"\n[INFO] Early stopping at epoch {epoch+1}")
+                if self.is_main:
+                    print(f"\n[INFO] Early stopping at epoch {epoch+1}")
                 break
         
         return history
@@ -650,6 +679,9 @@ def main():
                         help='批大小')
     parser.add_argument('--output', type=str, default='distill_log',
                         help='输出日志文件名')
+    # DDP参数（torchrun自动设置）
+    parser.add_argument('--local_rank', type=int, default=-1,
+                        help='Local rank for distributed training (set by torchrun)')
     
     args = parser.parse_args()
     
@@ -657,19 +689,37 @@ def main():
     config = config_from_args(args)
     config.paths.ensure_dirs()
     
-    print("=" * 60)
-    print("DUSt3R Knowledge Distillation")
-    print("=" * 60)
-    print(f"  Exp ID: {config.exp_id}")
-    print(f"  Device: {config.device}")
-    print(f"  Dry run: {args.dry_run}")
-    print("=" * 60)
+    # ========== DDP初始化 ==========
+    # 检测是否为分布式训练（torchrun会设置环境变量）
+    is_distributed = int(os.environ.get('WORLD_SIZE', 1)) > 1
+    local_rank = int(os.environ.get('LOCAL_RANK', args.local_rank))
+    world_size = int(os.environ.get('WORLD_SIZE', 1))
+    rank = int(os.environ.get('RANK', 0))
     
-    # 设备
-    device = config.device
-    if device == 'cuda' and not torch.cuda.is_available():
-        print("[WARN] CUDA not available, using CPU")
-        device = 'cpu'
+    if is_distributed:
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group(backend='nccl')
+        device = f'cuda:{local_rank}'
+        if rank == 0:
+            print(f"[DDP] Initialized: world_size={world_size}, using NCCL backend")
+    else:
+        device = config.device
+        if device == 'cuda' and not torch.cuda.is_available():
+            print("[WARN] CUDA not available, using CPU")
+            device = 'cpu'
+    
+    # 只在主进程打印
+    is_main = (rank == 0)
+    
+    if is_main:
+        print("=" * 60)
+        print("DUSt3R Knowledge Distillation")
+        print("=" * 60)
+        print(f"  Exp ID: {config.exp_id}")
+        print(f"  Device: {device}")
+        print(f"  Distributed: {is_distributed} (world_size={world_size})")
+        print(f"  Dry run: {args.dry_run}")
+        print("=" * 60)
     
     # 设置随机种子
     torch.manual_seed(config.seed)
@@ -706,26 +756,51 @@ def main():
                 pairs_list="", dummy=True, num_dummy=20, img_size=img_size
             )
     
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=0 if args.dry_run else data_cfg.get('num_workers', 4),
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=0 if args.dry_run else data_cfg.get('num_workers', 4),
-    )
+    # 创建DataLoader（分布式训练使用DistributedSampler）
+    num_workers = 0 if args.dry_run else data_cfg.get('num_workers', 4)
     
-    print(f"[INFO] Train samples: {len(train_dataset)}, Val samples: {len(val_dataset)}")
+    if is_distributed:
+        train_sampler = DistributedSampler(train_dataset, shuffle=True)
+        val_sampler = DistributedSampler(val_dataset, shuffle=False)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            sampler=train_sampler,
+            num_workers=num_workers,
+            pin_memory=True,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            sampler=val_sampler,
+            num_workers=num_workers,
+            pin_memory=True,
+        )
+    else:
+        train_sampler = None
+        val_sampler = None
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+        )
+    
+    if is_main:
+        print(f"[INFO] Train samples: {len(train_dataset)}, Val samples: {len(val_dataset)}")
     
     # 加载 Teacher（使用真实的DUSt3R模型）
     teacher_cfg = config.experiment.get('teacher', {})
     teacher_weights = args.teacher_weights or teacher_cfg.get('weights')
     
-    print("[INFO] Loading Teacher model (real DUSt3R from HuggingFace)...")
+    if is_main:
+        print("[INFO] Loading Teacher model (real DUSt3R from HuggingFace)...")
     teacher = load_teacher_model(weights_path=teacher_weights, device=device)
     
     # 创建 Student
@@ -739,25 +814,38 @@ def main():
         device=device,
     )
     
-    # 打印模型统计（跳过FLOPs计算以避免trace错误）
-    print("\n[INFO] Model Statistics:")
-    try:
-        teacher_stats = get_model_stats(teacher, config.input_shape, device, measure_vram_flag=False)
-        student_stats = get_model_stats(student, config.input_shape, device, measure_vram_flag=False)
-        print(f"  Teacher: {teacher_stats}")
-        print(f"  Student: {student_stats}")
-        print(f"  Compression: {student_stats.params_M / teacher_stats.params_M * 100:.1f}% params")
-    except Exception as e:
-        # 如果FLOPs计算失败，只计算参数量
-        from scripts.utils.model_stats import count_parameters
-        teacher_params, _ = count_parameters(teacher)
-        student_params, _ = count_parameters(student)
-        print(f"  Teacher: {teacher_params/1e6:.2f}M parameters")
-        print(f"  Student: {student_params/1e6:.2f}M parameters")
-        print(f"  Compression: {student_params / teacher_params * 100:.1f}% params")
-        print(f"  [WARN] FLOPs calculation skipped due to: {type(e).__name__}")
+    # ========== DDP模型包装 ==========
+    if is_distributed:
+        # 关键：DDP可以处理字典输入，因为它包装的是module而不是数据
+        # 每个进程独立处理自己的数据分片
+        student = DDP(student, device_ids=[local_rank], output_device=local_rank)
+        # Teacher不需要DDP（不参与训练，只做推理）
+        if is_main:
+            print(f"[DDP] Student wrapped with DistributedDataParallel")
     
-    # 创建训练器
+    # 打印模型统计（跳过FLOPs计算以避免trace错误）
+    if is_main:
+        print("\n[INFO] Model Statistics:")
+        try:
+            # DDP包装后需要访问.module获取原始模型
+            raw_student = student.module if is_distributed else student
+            teacher_stats = get_model_stats(teacher, config.input_shape, device, measure_vram_flag=False)
+            student_stats = get_model_stats(raw_student, config.input_shape, device, measure_vram_flag=False)
+            print(f"  Teacher: {teacher_stats}")
+            print(f"  Student: {student_stats}")
+            print(f"  Compression: {student_stats.params_M / teacher_stats.params_M * 100:.1f}% params")
+        except Exception as e:
+            # 如果FLOPs计算失败，只计算参数量
+            from scripts.utils.model_stats import count_parameters
+            raw_student = student.module if is_distributed else student
+            teacher_params, _ = count_parameters(teacher)
+            student_params, _ = count_parameters(raw_student)
+            print(f"  Teacher: {teacher_params/1e6:.2f}M parameters")
+            print(f"  Student: {student_params/1e6:.2f}M parameters")
+            print(f"  Compression: {student_params / teacher_params * 100:.1f}% params")
+            print(f"  [WARN] FLOPs calculation skipped due to: {type(e).__name__}")
+    
+    # 创建训练器（传入DDP相关参数）
     trainer = DistillationTrainer(
         student=student,
         teacher=teacher,
@@ -765,6 +853,9 @@ def main():
         val_loader=val_loader,
         config=config,
         device=device,
+        is_distributed=is_distributed,
+        is_main=is_main,
+        train_sampler=train_sampler,
     )
     
     # 训练
@@ -772,118 +863,129 @@ def main():
     if args.dry_run:
         max_epochs = min(max_epochs, 2)
     
-    # 发送实验开始通知
-    try:
-        from scripts.experiment_notifier import notify_completion
-        notify_completion(
-            "K-only_real_data",
-            "running",
-            {
-                "message": "实验开始训练",
-                "train_samples": len(train_dataset),
-                "val_samples": len(val_dataset),
-                "teacher_params": f"{sum(p.numel() for p in teacher.parameters())/1e6:.2f}M",
-                "student_params": f"{sum(p.numel() for p in student.parameters())/1e6:.2f}M",
-                "max_epochs": max_epochs,
-            }
-        )
-    except Exception as e:
-        print(f"[WARN] 通知发送失败: {e}")
+    # 发送实验开始通知（仅主进程）
+    if is_main:
+        try:
+            from scripts.experiment_notifier import notify_completion
+            raw_student = student.module if is_distributed else student
+            notify_completion(
+                "K-only_real_data",
+                "running",
+                {
+                    "message": "实验开始训练",
+                    "train_samples": len(train_dataset),
+                    "val_samples": len(val_dataset),
+                    "teacher_params": f"{sum(p.numel() for p in teacher.parameters())/1e6:.2f}M",
+                    "student_params": f"{sum(p.numel() for p in raw_student.parameters())/1e6:.2f}M",
+                    "max_epochs": max_epochs,
+                    "distributed": is_distributed,
+                    "world_size": world_size,
+                }
+            )
+        except Exception as e:
+            print(f"[WARN] 通知发送失败: {e}")
     
     start_time = datetime.now()
     history = trainer.train(max_epochs=max_epochs)
     elapsed_hours = (datetime.now() - start_time).total_seconds() / 3600
     
-    # 加载最佳模型进行最终评测
-    best_path = config.paths.checkpoints / 'student_fp32_best.pth'
-    if best_path.exists():
-        student.load_state_dict(torch.load(best_path, map_location=device))
-    
-    # 计算最终统计（跳过FLOPs避免trace错误）
-    try:
-        final_stats = get_model_stats(student, config.input_shape, device, measure_vram_flag=False)
-    except Exception as e:
-        # Student模型的forward需要两个view，FLOPs计算会失败
-        from scripts.utils.model_stats import count_parameters, ModelStats
-        params, trainable = count_parameters(student)
-        final_stats = ModelStats(
-            params_M=params / 1e6,
-            params_trainable_M=trainable / 1e6,
-            flops_G=0.0,  # 跳过FLOPs
-            size_MB=params * 4 / 1024 / 1024,  # FP32估算
-            vram_GB=0.0,
+    # 以下仅在主进程执行
+    if is_main:
+        # 加载最佳模型进行最终评测
+        raw_student = student.module if is_distributed else student
+        best_path = config.paths.checkpoints / 'student_fp32_best.pth'
+        if best_path.exists():
+            raw_student.load_state_dict(torch.load(best_path, map_location=device))
+        
+        # 计算最终统计（跳过FLOPs避免trace错误）
+        try:
+            final_stats = get_model_stats(raw_student, config.input_shape, device, measure_vram_flag=False)
+        except Exception as e:
+            # Student模型的forward需要两个view，FLOPs计算会失败
+            from scripts.utils.model_stats import count_parameters, ModelStats
+            params, trainable = count_parameters(raw_student)
+            final_stats = ModelStats(
+                params_M=params / 1e6,
+                params_trainable_M=trainable / 1e6,
+                flops_G=0.0,  # 跳过FLOPs
+                size_MB=params * 4 / 1024 / 1024,  # FP32估算
+                vram_GB=0.0,
+            )
+            print(f"[WARN] Final stats FLOPs skipped: {type(e).__name__}")
+        
+        # 创建日志
+        distill_cfg = config.experiment.get('distill', {})
+        log = ExperimentLog(
+            exp_id=f"K_only_{config.seed}",
+            combo="K-only",
+            seed=config.seed,
+            dataset_id=data_cfg.get('dataset_id', 'unknown'),
+            split=data_cfg.get('split', 'train'),
+            
+            # 超参数
+            beta=distill_cfg.get('beta_distill_init', 0.5),
+            gamma=distill_cfg.get('gamma_conf_init', 0.0),
+            
+            # 资源
+            params_M=final_stats.params_M,
+            flops_G=final_stats.flops_G,
+            size_MB=final_stats.size_MB,
+            vram_GB=final_stats.vram_GB,
+            
+            # 质量（需要实际评测填充）
+            chamfer=0.0,
+            absrel=0.0,
+            rmse=0.0,
+            delta1=0.0,
+            reproj_px=0.0,
+            
+            # 效率（训练后评测填充）
+            t_pair_p50_ms=0.0,
+            t_pair_p95_ms=0.0,
+            t_scene_s=0.0,
+            pairs_per_sec=0.0,
+            
+            # 元信息
+            gpu_hours=elapsed_hours,
+            notes=f"{'[DRY-RUN] ' if args.dry_run else ''}K-only distillation, final val_loss={history['val_loss'][-1]:.4f}",
         )
-        print(f"[WARN] Final stats FLOPs skipped: {type(e).__name__}")
-    
-    # 创建日志
-    distill_cfg = config.experiment.get('distill', {})
-    log = ExperimentLog(
-        exp_id=f"K_only_{config.seed}",
-        combo="K-only",
-        seed=config.seed,
-        dataset_id=data_cfg.get('dataset_id', 'unknown'),
-        split=data_cfg.get('split', 'train'),
         
-        # 超参数
-        beta=distill_cfg.get('beta_distill_init', 0.5),
-        gamma=distill_cfg.get('gamma_conf_init', 0.0),
-        
-        # 资源
-        params_M=final_stats.params_M,
-        flops_G=final_stats.flops_G,
-        size_MB=final_stats.size_MB,
-        vram_GB=final_stats.vram_GB,
-        
-        # 质量（需要实际评测填充）
-        chamfer=0.0,
-        absrel=0.0,
-        rmse=0.0,
-        delta1=0.0,
-        reproj_px=0.0,
-        
-        # 效率（训练后评测填充）
-        t_pair_p50_ms=0.0,
-        t_pair_p95_ms=0.0,
-        t_scene_s=0.0,
-        pairs_per_sec=0.0,
-        
-        # 元信息
-        gpu_hours=elapsed_hours,
-        notes=f"{'[DRY-RUN] ' if args.dry_run else ''}K-only distillation, final val_loss={history['val_loss'][-1]:.4f}",
-    )
-    
-    # 保存日志
-    output_paths = save_experiment_log(
-        log=log,
-        log_dir=config.paths.logs,
-        also_csv=True,
-    )
-    
-    print("\n" + "=" * 60)
-    print("Training Complete!")
-    print(f"  Best checkpoint: {config.paths.checkpoints / 'student_fp32_best.pth'}")
-    print(f"  JSON log: {output_paths['json']}")
-    print(f"  GPU hours: {elapsed_hours:.2f}h")
-    print("=" * 60)
-    
-    # 发送实验完成通知
-    try:
-        from scripts.experiment_notifier import notify_completion
-        best_loss = min([h.get('val_loss', float('inf')) for h in history])
-        notify_completion(
-            "K-only_real_data",
-            "success",
-            {
-                "message": "实验训练完成",
-                "best_val_loss": f"{best_loss:.6f}",
-                "total_epochs": len(history),
-                "elapsed_hours": f"{elapsed_hours:.2f}",
-                "checkpoint": str(config.paths.checkpoints / 'student_fp32_best.pth'),
-                "log_file": str(output_paths['json']),
-            }
+        # 保存日志
+        output_paths = save_experiment_log(
+            log=log,
+            log_dir=config.paths.logs,
+            also_csv=True,
         )
-    except Exception as e:
-        print(f"[WARN] 完成通知发送失败: {e}")
+        
+        print("\n" + "=" * 60)
+        print("Training Complete!")
+        print(f"  Best checkpoint: {config.paths.checkpoints / 'student_fp32_best.pth'}")
+        print(f"  JSON log: {output_paths['json']}")
+        print(f"  GPU hours: {elapsed_hours:.2f}h")
+        print("=" * 60)
+        
+        # 发送实验完成通知
+        try:
+            from scripts.experiment_notifier import notify_completion
+            best_loss = min(history['val_loss']) if history['val_loss'] else float('inf')
+            notify_completion(
+                "K-only_real_data",
+                "success",
+                {
+                    "message": "实验训练完成",
+                    "best_val_loss": f"{best_loss:.6f}",
+                    "total_epochs": len(history['val_loss']),
+                    "elapsed_hours": f"{elapsed_hours:.2f}",
+                    "checkpoint": str(config.paths.checkpoints / 'student_fp32_best.pth'),
+                    "log_file": str(output_paths['json']),
+                }
+            )
+        except Exception as e:
+            print(f"[WARN] 完成通知发送失败: {e}")
+    
+    # DDP cleanup
+    if is_distributed:
+        dist.destroy_process_group()
     
     return 0
 
