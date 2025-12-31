@@ -10,6 +10,9 @@ checkpoints/*.bin
 checkpoints/*.onnx
 checkpoints/*.trt
 checkpoints/*.engine
+test_checkpoints/
+*.pth
+*.safetensors
 
 # ============ 第三方代码 ============
 # dust3r 作为 git submodule 管理，不在 .gitignore 中排除
@@ -72,6 +75,11 @@ Thumbs.db
 # ============ Jupyter ============
 .ipynb_checkpoints/
 *.ipynb
+
+# ============ 论文PDF（太大，不上传）============
+docs/论文相关文献/*.pdf
+论文相关文献/*.pdf
+*.pdf
 
 # ============ 临时文件 ============
 *.tmp
