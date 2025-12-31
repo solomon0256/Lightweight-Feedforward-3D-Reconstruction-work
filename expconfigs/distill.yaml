@@ -7,7 +7,7 @@ run:
   exp_name: "K_only_student_v1" # 日志/模型输出目录名的一部分
   seed: 42
   max_epochs: 30
-  early_stop_patience: 3 # 连续 N 次 val 无提升即早停
+  early_stop_patience: 10 # 连续 N 次 val 无提升即早停（从3增加到10，避免过早停止）
   ckpt_interval: 1 # 每 N epoch 保存一次
 
 paths:
@@ -24,25 +24,32 @@ data:
   batch_size: 1 # DUSt3R 类任务以 pair 为粒度，按统一口径 BS=1
 
 teacher:
-  weights: "checkpoints/DUSt3R_teacher.safetensors"
-  eval_fp16: true # 推理半精度以提速（不影响作为蒸馏“老师”的目标）
+  weights: null  # 使用null从HuggingFace加载真实Teacher模型
+  eval_fp16: true # 推理半精度以提速（不影响作为蒸馏"老师"的目标）
 
 student:
-  # 解析规则：脚本根据 arch 或 student_config 构建 Student
-  arch: "dust3r_student_s" # 可用 _s/_m 等预设；或改用 student_config
+  # Student-S配置（与最终方案对齐）
+  arch: "dust3r_student_s"
   student_config:
-    # 若 arch 无法解析，用这个结构直配（二选一）
-    encoder_layers: 10 # 例如从 12 降到 10
-    mha_heads_ratio: 0.8 # 注意力头缩放比例
-    ffn_ratio: 0.8 # FFN 宽度缩放比例
-  init_from_pruned: false # 若想用 P(ρ=0.1) 结果作为 student 初始，改成 true
+    encoder_layers: 17
+    encoder_heads: 12
+    encoder_dim: 720
+    encoder_ffn_ratio: 4.0
+    decoder_layers: 8
+    decoder_heads: 9
+    decoder_dim: 540
+    decoder_ffn_ratio: 4.0
+    patch_size: 16
+    img_size: [512, 384]
+  init_from_pruned: false
 
 distill:
   enable: true
-  kd_temperature: [ 3, 5 ] # KL 温度候选
-  beta_kd: [ 0.5, 0.7 ] # KL 权重候选（后期可提高）
-  gamma_fd: [ 0.0, 0.1 ] # Feature Distill 权重（无显式 logits 时尤为重要）
-  curriculum_pct_task_first: 0.7 # 课程式蒸馏：前 70% 以任务损失为主，后 30% 提升 KD
+  beta_distill_init: 0.5    # 前期L_distill权重
+  beta_distill_final: 1.0   # 后期L_distill权重
+  gamma_conf_init: 0.0      # 前期L_conf权重
+  gamma_conf_final: 0.1     # 后期L_conf权重
+  curriculum_pct: 0.7       # 课程式蒸馏：前 70% 以任务损失为主，后 30% 提升蒸馏权重
 
 optim:
   lr: 2e-4

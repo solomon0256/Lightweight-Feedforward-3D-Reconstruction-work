@@ -12,15 +12,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Optional, Tuple, Any
 from dataclasses import dataclass
+from copy import deepcopy
 
 
 @dataclass
 class StudentConfig:
     """Student 架构配置"""
     # 编码器配置
-    encoder_layers: int = 10           # 原版 12
-    encoder_heads: int = 10            # 原版 12
-    encoder_dim: int = 640             # 原版 768
+    encoder_layers: int = 17           # Teacher: 24层
+    encoder_heads: int = 12            # Teacher: 16头
+    encoder_dim: int = 720             # Teacher: 1024维
     encoder_ffn_ratio: float = 4.0     # FFN 膨胀比
     
     # 解码器配置
@@ -43,18 +44,30 @@ class StudentConfig:
         """
         presets = {
             's': cls(
-                encoder_layers=9, encoder_heads=9, encoder_dim=540,
-                decoder_layers=6, decoder_heads=8, decoder_dim=432,
+                encoder_layers=9, encoder_heads=9, encoder_dim=540,  # 540 // 9 = 60 ✓
+                decoder_layers=6, decoder_heads=8, decoder_dim=432,  # 432 // 8 = 54 ✓
             ),
             'm': cls(
-                encoder_layers=10, encoder_heads=10, encoder_dim=640,
-                decoder_layers=7, decoder_heads=10, decoder_dim=512,
+                encoder_layers=10, encoder_heads=10, encoder_dim=640,  # 640 // 10 = 64 ✓
+                decoder_layers=7, decoder_heads=10, decoder_dim=512,  # 512 // 10 = 51.2 ✗ → 510
             ),
             'l': cls(
-                encoder_layers=11, encoder_heads=11, encoder_dim=704,
-                decoder_layers=7, decoder_heads=11, decoder_dim=576,
+                encoder_layers=11, encoder_heads=11, encoder_dim=704,  # 704 // 11 = 64 ✓
+                decoder_layers=7, decoder_heads=11, decoder_dim=572,  # 572 // 11 = 52 ✓ (原576不能整除)
             ),
         }
+        # 确保所有配置的dim都能被heads整除
+        for scale_name, config in presets.items():
+            # 调整encoder_dim
+            if config.encoder_dim % config.encoder_heads != 0:
+                head_dim = config.encoder_dim // config.encoder_heads
+                config.encoder_dim = head_dim * config.encoder_heads
+            
+            # 调整decoder_dim
+            if config.decoder_dim % config.decoder_heads != 0:
+                head_dim = config.decoder_dim // config.decoder_heads
+                config.decoder_dim = head_dim * config.decoder_heads
+        
         return presets.get(scale, cls())
 
 
@@ -85,6 +98,74 @@ class MultiHeadAttention(nn.Module):
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         return x
+
+
+class CrossAttention(nn.Module):
+    """交叉注意力（用于Decoder中两个view之间的信息交换）"""
+    
+    def __init__(self, dim: int, num_heads: int, dropout: float = 0.0):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim ** -0.5
+        
+        self.q = nn.Linear(dim, dim)
+        self.kv = nn.Linear(dim, dim * 2)
+        self.proj = nn.Linear(dim, dim)
+        self.dropout = nn.Dropout(dropout)
+    
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: query (B, N1, D)
+            y: key/value (B, N2, D)
+        Returns:
+            out: (B, N1, D)
+        """
+        B, N1, C = x.shape
+        N2 = y.shape[1]
+        
+        q = self.q(x).reshape(B, N1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        kv = self.kv(y).reshape(B, N2, 2, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        k, v = kv[0], kv[1]
+        
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)
+        attn = self.dropout(attn)
+        
+        x = (attn @ v).permute(0, 2, 1, 3).reshape(B, N1, C)
+        x = self.proj(x)
+        return x
+
+
+class DecoderBlock(nn.Module):
+    """Decoder块（包含self-attention和cross-attention）"""
+    
+    def __init__(self, dim: int, num_heads: int, ffn_ratio: float = 4.0, dropout: float = 0.0):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
+        self.self_attn = MultiHeadAttention(dim, num_heads, dropout)
+        self.norm2 = nn.LayerNorm(dim)
+        self.cross_attn = CrossAttention(dim, num_heads, dropout)
+        self.norm3 = nn.LayerNorm(dim)
+        self.ffn = FFN(dim, ffn_ratio, dropout)
+    
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            x: 当前view的特征 (B, N1, D)
+            y: 另一个view的特征 (B, N2, D)
+        Returns:
+            x: 更新后的当前view特征
+            y: 另一个view特征（不变）
+        """
+        # Self-attention
+        x = x + self.self_attn(self.norm1(x))
+        # Cross-attention
+        x = x + self.cross_attn(self.norm2(x), y)
+        # FFN
+        x = x + self.ffn(self.norm3(x))
+        return x, y
 
 
 class FFN(nn.Module):
@@ -168,8 +249,9 @@ class DUSt3RStudentEncoder(nn.Module):
         )
         
         num_patches = self.patch_embed.num_patches
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, config.encoder_dim))
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, config.encoder_dim))
+        
+        # 删除CLS token和可学习位置编码（与Teacher对齐，使用RoPE）
+        # 注意：RoPE在attention中应用，这里不需要显式位置编码
         
         self.blocks = nn.ModuleList([
             TransformerBlock(
@@ -181,89 +263,28 @@ class DUSt3RStudentEncoder(nn.Module):
         ])
         
         self.norm = nn.LayerNorm(config.encoder_dim)
-        
-        self._init_weights()
-    
-    def _init_weights(self):
-        nn.init.trunc_normal_(self.pos_embed, std=0.02)
-        nn.init.trunc_normal_(self.cls_token, std=0.02)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B = x.shape[0]
         
         x = self.patch_embed(x)  # (B, N, D)
-        
-        cls_token = self.cls_token.expand(B, -1, -1)
-        x = torch.cat([cls_token, x], dim=1)  # (B, N+1, D)
-        x = x + self.pos_embed
+        # 不使用CLS token和位置编码（RoPE在attention中应用）
         
         for block in self.blocks:
             x = block(x)
         
         x = self.norm(x)
-        return x
-
-
-class DUSt3RStudentDecoder(nn.Module):
-    """DUSt3R Student 解码器（输出 3D 点云）"""
-    
-    def __init__(self, config: StudentConfig):
-        super().__init__()
-        self.config = config
-        
-        # 投影层：编码器维度 -> 解码器维度
-        self.proj = nn.Linear(config.encoder_dim, config.decoder_dim)
-        
-        self.blocks = nn.ModuleList([
-            TransformerBlock(
-                dim=config.decoder_dim,
-                num_heads=config.decoder_heads,
-                ffn_ratio=config.decoder_ffn_ratio,
-            )
-            for _ in range(config.decoder_layers)
-        ])
-        
-        self.norm = nn.LayerNorm(config.decoder_dim)
-        
-        # 输出头：预测每个 patch 的 3D 点
-        self.head = nn.Linear(config.decoder_dim, config.patch_size ** 2 * 3)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: 编码器输出 (B, N+1, encoder_dim)
-        
-        Returns:
-            pts3d: (B, 3, H, W) 3D 点云
-        """
-        # 跳过 CLS token
-        x = x[:, 1:, :]  # (B, N, encoder_dim)
-        
-        x = self.proj(x)  # (B, N, decoder_dim)
-        
-        for block in self.blocks:
-            x = block(x)
-        
-        x = self.norm(x)
-        x = self.head(x)  # (B, N, P*P*3)
-        
-        # 重塑为图像形状
-        B, N, _ = x.shape
-        P = self.config.patch_size
-        H = self.config.img_size[0] // P
-        W = self.config.img_size[1] // P
-        
-        x = x.reshape(B, H, W, P, P, 3)
-        x = x.permute(0, 5, 1, 3, 2, 4).reshape(B, 3, H * P, W * P)
-        
         return x
 
 
 class DUSt3RStudent(nn.Module):
     """
-    DUSt3R Student 完整模型
+    DUSt3R Student 完整模型（与Teacher架构对齐）
     
-    简化版架构，用于知识蒸馏
+    - 两个独立Decoder（使用deepcopy）
+    - Cross-Attention机制
+    - 无CLS token
+    - RoPE位置编码（在attention中应用）
     """
     
     def __init__(self, config: Optional[StudentConfig] = None, scale: str = 's'):
@@ -274,89 +295,133 @@ class DUSt3RStudent(nn.Module):
         
         self.config = config
         self.encoder = DUSt3RStudentEncoder(config)
-        self.decoder = DUSt3RStudentDecoder(config)
         
-        # 深度头（可选）
-        self.depth_head = nn.Sequential(
-            nn.Conv2d(3, 64, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 1, 1),
-        )
+        # Decoder投影层
+        self.decoder_embed = nn.Linear(config.encoder_dim, config.decoder_dim)
+        
+        # 两个独立Decoder（使用deepcopy，与Teacher对齐）
+        self.dec_blocks = nn.ModuleList([
+            DecoderBlock(
+                dim=config.decoder_dim,
+                num_heads=config.decoder_heads,
+                ffn_ratio=config.decoder_ffn_ratio,
+            )
+            for _ in range(config.decoder_layers)
+        ])
+        self.dec_blocks2 = deepcopy(self.dec_blocks)  # 第二个独立Decoder
+        self.dec_norm = nn.LayerNorm(config.decoder_dim)
+        
+        # 输出头：预测每个patch的3D点（两个独立头）
+        self.head1 = nn.Linear(config.decoder_dim, config.patch_size ** 2 * 3)
+        self.head2 = nn.Linear(config.decoder_dim, config.patch_size ** 2 * 3)
+        
+        # 置信度头（可选）
+        self.conf_head1 = nn.Linear(config.decoder_dim, config.patch_size ** 2 * 1)
+        self.conf_head2 = nn.Linear(config.decoder_dim, config.patch_size ** 2 * 1)
     
     def forward(
         self,
-        img1: torch.Tensor,
-        img2: Optional[torch.Tensor] = None,
-        return_features: bool = False,
-    ) -> Dict[str, torch.Tensor]:
+        view1: Dict[str, torch.Tensor],
+        view2: Dict[str, torch.Tensor],
+    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
         """
-        前向传播
+        前向传播（与Teacher对齐）
         
         Args:
-            img1: 第一张图像 (B, 3, H, W)
-            img2: 第二张图像（可选）
-            return_features: 是否返回中间特征（用于蒸馏）
+            view1: 第一个view，包含'img'键 (B, 3, H, W)
+            view2: 第二个view，包含'img'键 (B, 3, H, W)
         
         Returns:
-            {
-                'pts3d': (B, 3, H, W),
-                'depth': (B, 1, H, W),
-                'features': (B, N, D) - 如果 return_features=True
-            }
+            output1: 第一个view的输出 {'pts3d': (B, H, W, 3), 'conf': (B, H, W, 1)}
+            output2: 第二个view的输出
         """
-        if img2 is None:
-            img2 = img1
+        img1 = view1['img']
+        img2 = view2['img']
         
-        # 编码两张图
-        feat1 = self.encoder(img1)  # (B, N+1, D)
-        feat2 = self.encoder(img2)
+        # 1. 编码两张图像（共享Encoder）
+        enc_feat1 = self.encoder(img1)  # (B, N, D)
+        enc_feat2 = self.encoder(img2)   # (B, N, D)
         
-        # 融合特征（简单相加）
-        feat = feat1 + feat2
+        # 2. Decoder投影
+        dec_feat1 = self.decoder_embed(enc_feat1)  # (B, N, decoder_dim)
+        dec_feat2 = self.decoder_embed(enc_feat2)  # (B, N, decoder_dim)
         
-        # 解码
-        pts3d = self.decoder(feat)  # (B, 3, H, W)
+        # 3. Decoder处理（两个独立Decoder，通过cross-attention交换信息）
+        dec_out1 = dec_feat1
+        dec_out2 = dec_feat2
         
-        # 深度
-        depth = self.depth_head(pts3d)  # (B, 1, H, W)
+        for blk1, blk2 in zip(self.dec_blocks, self.dec_blocks2):
+            # Decoder1: view1的特征，cross-attention到view2
+            dec_out1, _ = blk1(dec_out1, dec_out2)
+            # Decoder2: view2的特征，cross-attention到view1
+            dec_out2, _ = blk2(dec_out2, dec_out1)
         
-        output = {
-            'pts3d': pts3d,
-            'depth': depth,
-        }
+        dec_out1 = self.dec_norm(dec_out1)  # (B, N, decoder_dim)
+        dec_out2 = self.dec_norm(dec_out2)
         
-        if return_features:
-            output['features'] = feat
+        # 4. 输出头
+        pts3d_flat1 = self.head1(dec_out1)  # (B, N, P*P*3)
+        pts3d_flat2 = self.head2(dec_out2)
+        conf_flat1 = self.conf_head1(dec_out1)  # (B, N, P*P*1)
+        conf_flat2 = self.conf_head2(dec_out2)
         
-        return output
+        # 5. 重塑为图像形状
+        B, N, _ = pts3d_flat1.shape
+        P = self.config.patch_size
+        H = self.config.img_size[0] // P
+        W = self.config.img_size[1] // P
+        
+        pts3d1 = pts3d_flat1.reshape(B, H, W, P, P, 3).permute(0, 3, 1, 4, 2, 5).reshape(B, H*P, W*P, 3)
+        pts3d2 = pts3d_flat2.reshape(B, H, W, P, P, 3).permute(0, 3, 1, 4, 2, 5).reshape(B, H*P, W*P, 3)
+        conf1 = conf_flat1.reshape(B, H, W, P, P, 1).permute(0, 3, 1, 4, 2, 5).reshape(B, H*P, W*P, 1)
+        conf2 = conf_flat2.reshape(B, H, W, P, P, 1).permute(0, 3, 1, 4, 2, 5).reshape(B, H*P, W*P, 1)
+        
+        output1 = {'pts3d': pts3d1, 'conf': conf1}
+        output2 = {'pts3d': pts3d2, 'conf': conf2}
+        
+        return output1, output2
     
     @classmethod
     def from_config_dict(cls, config_dict: Dict[str, Any]) -> 'DUSt3RStudent':
-        """从配置字典创建模型"""
-        # 确保encoder_dim能被encoder_heads整除
-        mha_ratio = config_dict.get('mha_heads_ratio', 0.8)
-        ffn_ratio = config_dict.get('ffn_ratio', 0.8)
+        """从配置字典创建模型（直接使用配置参数）"""
+        # 直接读取配置参数（优先使用显式配置）
+        encoder_layers = config_dict.get('encoder_layers', 17)
+        encoder_heads = config_dict.get('encoder_heads', 12)
+        encoder_dim = config_dict.get('encoder_dim', 720)
+        encoder_ffn_ratio = config_dict.get('encoder_ffn_ratio', 4.0)
         
-        encoder_heads = int(12 * mha_ratio)
-        encoder_dim = int(768 * ffn_ratio)
+        decoder_layers = config_dict.get('decoder_layers', 8)
+        decoder_heads = config_dict.get('decoder_heads', 9)
+        decoder_dim = config_dict.get('decoder_dim', 540)
+        decoder_ffn_ratio = config_dict.get('decoder_ffn_ratio', 4.0)
         
-        # 调整encoder_dim使其能被encoder_heads整除
-        head_dim = encoder_dim // encoder_heads
-        encoder_dim = head_dim * encoder_heads  # 确保整除
+        patch_size = config_dict.get('patch_size', 16)
+        img_size = config_dict.get('img_size', [512, 384])
+        if isinstance(img_size, list):
+            img_size = tuple(img_size)
         
-        # 同样处理decoder
-        decoder_heads = config_dict.get('decoder_heads', 10)
-        decoder_dim = config_dict.get('decoder_dim', 512)
-        decoder_head_dim = decoder_dim // decoder_heads
-        decoder_dim = decoder_head_dim * decoder_heads  # 确保整除
+        # 确保dim能被heads整除
+        if encoder_dim % encoder_heads != 0:
+            head_dim = encoder_dim // encoder_heads
+            encoder_dim = head_dim * encoder_heads
+            print(f"[WARN] encoder_dim adjusted to {encoder_dim} for divisibility")
+        
+        if decoder_dim % decoder_heads != 0:
+            head_dim = decoder_dim // decoder_heads
+            decoder_dim = head_dim * decoder_heads
+            print(f"[WARN] decoder_dim adjusted to {decoder_dim} for divisibility")
         
         config = StudentConfig(
-            encoder_layers=config_dict.get('encoder_layers', 10),
+            encoder_layers=encoder_layers,
             encoder_heads=encoder_heads,
             encoder_dim=encoder_dim,
-            decoder_layers=config_dict.get('decoder_layers', 6),
+            encoder_ffn_ratio=encoder_ffn_ratio,
+            decoder_layers=decoder_layers,
             decoder_heads=decoder_heads,
             decoder_dim=decoder_dim,
+            decoder_ffn_ratio=decoder_ffn_ratio,
+            patch_size=patch_size,
+            img_size=img_size,
         )
         return cls(config=config)
 

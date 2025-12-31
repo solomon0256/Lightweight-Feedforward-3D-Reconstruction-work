@@ -4,8 +4,8 @@
 
 用途：
 - 训练轻量 Student 模型逼近 Teacher
-- 使用 KL 散度 + 可选特征蒸馏损失
-- 支持课程式蒸馏（前期任务损失为主，后期增加 KD 权重）
+- 使用 Regr3D_Loss（归一化L2距离）+ 置信度对齐损失
+- 支持课程式蒸馏（前期任务损失为主，后期增加蒸馏权重）
 
 运行示例：
     python scripts/train_distill.py --exp-config distill.yaml
@@ -38,6 +38,12 @@ from scripts.utils.timer import Timer
 from scripts.utils.model_stats import get_model_stats
 from scripts.utils.metrics import MetricsCalculator, QualityMetrics
 from scripts.models import create_student_model, DUSt3RStudent
+
+# 导入DUSt3R的几何工具
+import sys
+DUST3R_PATH = PROJECT_ROOT / "third_party" / "dust3r"
+sys.path.insert(0, str(DUST3R_PATH))
+from dust3r.utils.geometry import normalize_pointcloud
 
 
 # ============ 数据集 ============
@@ -120,15 +126,42 @@ class PairDataset(Dataset):
 
 # ============ 蒸馏损失 ============
 
+def Regr3D_Loss(pred_pts: torch.Tensor, target_pts: torch.Tensor, norm_mode: str = 'avg_dis') -> torch.Tensor:
+    """
+    3D点云回归损失（归一化L2距离）
+    
+    Args:
+        pred_pts: (B, H, W, 3) 预测点云
+        target_pts: (B, H, W, 3) 目标点云
+        norm_mode: 归一化模式，'avg_dis'表示按平均距离归一化
+    
+    Returns:
+        loss: 标量损失值
+    """
+    # 确保点云格式为 (B, H, W, 3)
+    if pred_pts.ndim == 4 and pred_pts.shape[1] == 3:
+        # 如果是 (B, 3, H, W)，转换为 (B, H, W, 3)
+        pred_pts = pred_pts.permute(0, 2, 3, 1)
+    if target_pts.ndim == 4 and target_pts.shape[1] == 3:
+        target_pts = target_pts.permute(0, 2, 3, 1)
+    
+    # 归一化点云（单个点云时mask=None）
+    pred_norm = normalize_pointcloud(pred_pts, None, norm_mode)
+    target_norm = normalize_pointcloud(target_pts, None, norm_mode)
+    # L2距离
+    loss = torch.norm(pred_norm - target_norm, dim=-1).mean()
+    return loss
+
+
 class DistillationLoss(nn.Module):
     """
     蒸馏损失
     
-    L = α * L_task + β * L_kd + γ * L_fd
+    L = α * L_task + β * L_distill + γ * L_conf
     
-    - L_task: 任务损失（MSE on pts3d）
-    - L_kd: KL 散度（soft targets）
-    - L_fd: 特征蒸馏（MSE on features）
+    - L_task: 任务损失（归一化L2距离）
+    - L_distill: 蒸馏损失（Student vs Teacher点云对齐）
+    - L_conf: 置信度对齐损失
     """
     
     def __init__(
@@ -136,13 +169,11 @@ class DistillationLoss(nn.Module):
         alpha: float = 1.0,
         beta: float = 0.5,
         gamma: float = 0.0,
-        temperature: float = 3.0,
     ):
         super().__init__()
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
-        self.temperature = temperature
     
     def forward(
         self,
@@ -157,60 +188,79 @@ class DistillationLoss(nn.Module):
             {
                 'total': 总损失,
                 'task': 任务损失,
-                'kd': KL 散度损失,
-                'fd': 特征蒸馏损失,
+                'distill': 蒸馏损失,
+                'conf': 置信度对齐损失,
             }
         """
         losses = {}
         
-        # 任务损失
+        # 提取点云和置信度
         s_pts = student_output['pts3d']
         t_pts = teacher_output['pts3d']
         
+        # 任务损失（使用归一化的Regr3D_Loss）
         if gt is not None and 'gt_pts3d' in gt:
             # 使用 GT 计算任务损失
-            losses['task'] = F.mse_loss(s_pts, gt['gt_pts3d'])
+            losses['task'] = Regr3D_Loss(s_pts, gt['gt_pts3d'], norm_mode='avg_dis')
         else:
             # 使用 Teacher 输出作为目标
-            losses['task'] = F.mse_loss(s_pts, t_pts.detach())
+            losses['task'] = Regr3D_Loss(s_pts, t_pts.detach(), norm_mode='avg_dis')
         
-        # KL 散度（soft targets）
-        # 将 pts3d 展平后计算 softmax
-        s_flat = s_pts.flatten(1)  # (B, -1)
-        t_flat = t_pts.flatten(1)
+        # 蒸馏损失（Student vs Teacher点云对齐）
+        losses['distill'] = Regr3D_Loss(s_pts, t_pts.detach(), norm_mode='avg_dis')
         
-        s_log_prob = F.log_softmax(s_flat / self.temperature, dim=-1)
-        t_prob = F.softmax(t_flat / self.temperature, dim=-1)
-        
-        losses['kd'] = F.kl_div(s_log_prob, t_prob.detach(), reduction='batchmean') * (self.temperature ** 2)
-        
-        # 特征蒸馏
-        if self.gamma > 0 and 'features' in student_output and 'features' in teacher_output:
-            s_feat = student_output['features']
-            t_feat = teacher_output['features']
-            
-            # 如果维度不匹配，需要投影
-            if s_feat.shape != t_feat.shape:
-                # 简单方案：取平均
-                s_feat = s_feat.mean(dim=1)
-                t_feat = t_feat.mean(dim=1)
-            
-            losses['fd'] = F.mse_loss(s_feat, t_feat.detach())
+        # 置信度对齐损失 L_conf（如果形状不匹配，暂时跳过）
+        if 'conf' in student_output and 'conf' in teacher_output:
+            s_conf = student_output['conf']
+            t_conf = teacher_output['conf']
+            # 确保形状一致
+            try:
+                if s_conf.shape != t_conf.shape:
+                    # 如果形状不同，尝试reshape或squeeze最后一个维度
+                    if s_conf.ndim == 4 and t_conf.ndim == 4:
+                        # (B, H, W, 1) 格式
+                        if s_conf.shape[-1] == 1 and t_conf.shape[-1] == 1:
+                            s_conf_2d = s_conf.squeeze(-1)  # (B, H, W)
+                            t_conf_2d = t_conf.squeeze(-1)  # (B, H, W)
+                            # 如果H、W不同，使用插值
+                            if s_conf_2d.shape[1:] != t_conf_2d.shape[1:]:
+                                t_conf_2d = F.interpolate(
+                                    t_conf_2d.unsqueeze(1), 
+                                    size=s_conf_2d.shape[1:], 
+                                    mode='bilinear', 
+                                    align_corners=False
+                                ).squeeze(1)
+                            losses['conf'] = F.mse_loss(s_conf_2d, t_conf_2d.detach())
+                        else:
+                            losses['conf'] = torch.tensor(0.0, device=s_pts.device)
+                    else:
+                        losses['conf'] = torch.tensor(0.0, device=s_pts.device)
+                else:
+                    losses['conf'] = F.mse_loss(s_conf, t_conf.detach())
+            except Exception as e:
+                # 如果处理失败，暂时设为0
+                print(f"[WARN] Conf loss calculation failed: {e}, setting to 0")
+                losses['conf'] = torch.tensor(0.0, device=s_pts.device)
         else:
-            losses['fd'] = torch.tensor(0.0, device=s_pts.device)
+            losses['conf'] = torch.tensor(0.0, device=s_pts.device)
         
-        # 总损失
+        # 总损失：L_task + L_distill + L_conf
         losses['total'] = (
             self.alpha * losses['task'] +
-            self.beta * losses['kd'] +
-            self.gamma * losses['fd']
+            self.beta * losses['distill'] +
+            self.gamma * losses['conf']
         )
         
         return losses
     
-    def update_beta(self, new_beta: float):
-        """更新 KD 权重（用于课程式蒸馏）"""
-        self.beta = new_beta
+    def update_weights(self, alpha: float = None, beta: float = None, gamma: float = None):
+        """更新损失权重（用于课程式蒸馏）"""
+        if alpha is not None:
+            self.alpha = alpha
+        if beta is not None:
+            self.beta = beta
+        if gamma is not None:
+            self.gamma = gamma
 
 
 # ============ 训练器 ============
@@ -239,21 +289,17 @@ class DistillationTrainer:
         # 从配置获取蒸馏参数
         distill_cfg = config.experiment.get('distill', {})
         
-        # 获取第一个温度值（如果是列表）
-        temp_list = distill_cfg.get('kd_temperature', [3.0])
-        temperature = temp_list[0] if isinstance(temp_list, list) else temp_list
-        
-        beta_list = distill_cfg.get('beta_kd', [0.5])
-        beta = beta_list[0] if isinstance(beta_list, list) else beta_list
-        
-        gamma_list = distill_cfg.get('gamma_fd', [0.0])
-        gamma = gamma_list[0] if isinstance(gamma_list, list) else gamma_list
+        # 蒸馏损失配置（已删除temperature，使用Regr3D_Loss）
+        alpha = distill_cfg.get('alpha_task_init', 1.0)
+        beta_init = distill_cfg.get('beta_distill_init', 0.5)
+        beta = beta_init if isinstance(beta_init, (int, float)) else (beta_init[0] if isinstance(beta_init, list) else 0.5)
+        gamma_init = distill_cfg.get('gamma_conf_init', 0.0)
+        gamma = gamma_init if isinstance(gamma_init, (int, float)) else (gamma_init[0] if isinstance(gamma_init, list) else 0.0)
         
         self.criterion = DistillationLoss(
-            alpha=1.0,
+            alpha=alpha,
             beta=beta,
             gamma=gamma,
-            temperature=temperature,
         )
         
         # 优化器
@@ -281,9 +327,13 @@ class DistillationTrainer:
         self.no_improve_count = 0
         
         # 课程式蒸馏
-        self.curriculum_pct = distill_cfg.get('curriculum_pct_task_first', 0.7)
-        self.beta_init = beta
-        self.beta_final = beta_list[-1] if isinstance(beta_list, list) and len(beta_list) > 1 else beta * 1.4
+        self.curriculum_pct = distill_cfg.get('curriculum_pct', 0.7)
+        self.alpha_init = alpha
+        self.alpha_final = distill_cfg.get('alpha_task_final', 0.8)
+        self.beta_init = distill_cfg.get('beta_distill_init', 0.5)
+        self.beta_final = distill_cfg.get('beta_distill_final', 1.0)
+        self.gamma_init = distill_cfg.get('gamma_conf_init', 0.0)
+        self.gamma_final = distill_cfg.get('gamma_conf_final', 0.1)
         
         # 梯度裁剪
         self.grad_clip = optim_cfg.get('grad_clip', 1.0)
@@ -297,7 +347,7 @@ class DistillationTrainer:
         self.student.train()
         
         total_loss = 0.0
-        loss_components = {'task': 0.0, 'kd': 0.0, 'fd': 0.0}
+        loss_components = {'task': 0.0, 'distill': 0.0, 'conf': 0.0}
         num_batches = 0
         
         for batch in self.train_loader:
@@ -414,14 +464,15 @@ class DistillationTrainer:
         return {'val_loss': total_loss / max(num_batches, 1)}
     
     def update_curriculum(self, epoch: int):
-        """更新课程式蒸馏参数"""
+        """更新课程式蒸馏权重"""
         progress = epoch / self.max_epochs
-        
         if progress > self.curriculum_pct:
-            # 后段：增加 KD 权重
-            beta_progress = (progress - self.curriculum_pct) / (1 - self.curriculum_pct)
-            new_beta = self.beta_init + (self.beta_final - self.beta_init) * beta_progress
-            self.criterion.update_beta(new_beta)
+            # 后期：调整权重
+            weight_progress = (progress - self.curriculum_pct) / (1 - self.curriculum_pct)
+            alpha = self.alpha_init + (self.alpha_final - self.alpha_init) * weight_progress
+            beta = self.beta_init + (self.beta_final - self.beta_init) * weight_progress
+            gamma = self.gamma_init + (self.gamma_final - self.gamma_init) * weight_progress
+            self.criterion.update_weights(alpha=alpha, beta=beta, gamma=gamma)
     
     def save_checkpoint(self, epoch: int, is_best: bool = False):
         """保存检查点"""
@@ -463,7 +514,6 @@ class DistillationTrainer:
         print(f"  Max epochs: {self.max_epochs}")
         print(f"  Early stop patience: {self.early_stop_patience}")
         print(f"  Initial beta: {self.criterion.beta}")
-        print(f"  Temperature: {self.criterion.temperature}")
         print(f"{'='*60}\n")
         
         for epoch in range(self.max_epochs):
@@ -566,8 +616,12 @@ def load_teacher_model(weights_path: str = None, device: str = 'cuda') -> nn.Mod
         model = model.to(device)
         model.eval()
         
+        # 显式冻结Teacher参数
+        for param in model.parameters():
+            param.requires_grad = False
+        
         params = sum(p.numel() for p in model.parameters())
-        print(f"[INFO] Teacher model loaded: {params/1e6:.2f}M parameters")
+        print(f"[INFO] Teacher model loaded: {params/1e6:.2f}M parameters (frozen)")
         
         return model
     except Exception as e:
@@ -745,7 +799,21 @@ def main():
     if best_path.exists():
         student.load_state_dict(torch.load(best_path, map_location=device))
     
-    final_stats = get_model_stats(student, config.input_shape, device)
+    # 计算最终统计（跳过FLOPs避免trace错误）
+    try:
+        final_stats = get_model_stats(student, config.input_shape, device, measure_vram_flag=False)
+    except Exception as e:
+        # Student模型的forward需要两个view，FLOPs计算会失败
+        from scripts.utils.model_stats import count_parameters, ModelStats
+        params, trainable = count_parameters(student)
+        final_stats = ModelStats(
+            params_M=params / 1e6,
+            params_trainable_M=trainable / 1e6,
+            flops_G=0.0,  # 跳过FLOPs
+            size_MB=params * 4 / 1024 / 1024,  # FP32估算
+            vram_GB=0.0,
+        )
+        print(f"[WARN] Final stats FLOPs skipped: {type(e).__name__}")
     
     # 创建日志
     distill_cfg = config.experiment.get('distill', {})
@@ -757,9 +825,8 @@ def main():
         split=data_cfg.get('split', 'train'),
         
         # 超参数
-        T=distill_cfg.get('kd_temperature', [3.0])[0] if isinstance(distill_cfg.get('kd_temperature'), list) else distill_cfg.get('kd_temperature', 3.0),
-        beta=distill_cfg.get('beta_kd', [0.5])[0] if isinstance(distill_cfg.get('beta_kd'), list) else distill_cfg.get('beta_kd', 0.5),
-        gamma=distill_cfg.get('gamma_fd', [0.0])[0] if isinstance(distill_cfg.get('gamma_fd'), list) else distill_cfg.get('gamma_fd', 0.0),
+        beta=distill_cfg.get('beta_distill_init', 0.5),
+        gamma=distill_cfg.get('gamma_conf_init', 0.0),
         
         # 资源
         params_M=final_stats.params_M,
