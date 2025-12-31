@@ -1,0 +1,322 @@
+{
+  "timestamp": "2025-12-31T13:02:37.096841",
+  "experiment": "K-only_real_data",
+  "status": "running",
+  "details": {
+    "message": "实验开始训练",
+    "train_samples": 50,
+    "val_samples": 20,
+    "teacher_params": "571.17M",
+    "student_params": "69.02M",
+    "max_epochs": 1
+  }
+}
+================================================================================
+[2025-12-31T13:02:37.096841] K-only_real_data: RUNNING
+  message: 实验开始训练
+  train_samples: 50
+  val_samples: 20
+  teacher_params: 571.17M
+  student_params: 69.02M
+  max_epochs: 1
+================================================================================
+
+{
+  "timestamp": "2025-12-31T13:03:19.216744",
+  "experiment": "K-only_real_data",
+  "status": "running",
+  "details": {
+    "message": "实验开始训练",
+    "train_samples": 50,
+    "val_samples": 20,
+    "teacher_params": "571.17M",
+    "student_params": "69.02M",
+    "max_epochs": 1
+  }
+}
+================================================================================
+[2025-12-31T13:03:19.216744] K-only_real_data: RUNNING
+  message: 实验开始训练
+  train_samples: 50
+  val_samples: 20
+  teacher_params: 571.17M
+  student_params: 69.02M
+  max_epochs: 1
+================================================================================
+
+{
+  "timestamp": "2025-12-31T13:04:25.781957",
+  "experiment": "K-only_real_data",
+  "status": "running",
+  "details": {
+    "message": "实验开始训练",
+    "train_samples": 50,
+    "val_samples": 20,
+    "teacher_params": "571.17M",
+    "student_params": "69.02M",
+    "max_epochs": 1
+  }
+}
+================================================================================
+[2025-12-31T13:04:25.781957] K-only_real_data: RUNNING
+  message: 实验开始训练
+  train_samples: 50
+  val_samples: 20
+  teacher_params: 571.17M
+  student_params: 69.02M
+  max_epochs: 1
+================================================================================
+
+{
+  "timestamp": "2025-12-31T13:05:25.702254",
+  "experiment": "K-only_real_data",
+  "status": "running",
+  "details": {
+    "message": "实验开始训练",
+    "train_samples": 50,
+    "val_samples": 20,
+    "teacher_params": "571.17M",
+    "student_params": "69.02M",
+    "max_epochs": 1
+  }
+}
+================================================================================
+[2025-12-31T13:05:25.702254] K-only_real_data: RUNNING
+  message: 实验开始训练
+  train_samples: 50
+  val_samples: 20
+  teacher_params: 571.17M
+  student_params: 69.02M
+  max_epochs: 1
+================================================================================
+
+{
+  "timestamp": "2025-12-31T13:06:23.037681",
+  "experiment": "K-only_real_data",
+  "status": "running",
+  "details": {
+    "message": "实验开始训练",
+    "train_samples": 50,
+    "val_samples": 20,
+    "teacher_params": "571.17M",
+    "student_params": "69.02M",
+    "max_epochs": 1
+  }
+}
+================================================================================
+[2025-12-31T13:06:23.037681] K-only_real_data: RUNNING
+  message: 实验开始训练
+  train_samples: 50
+  val_samples: 20
+  teacher_params: 571.17M
+  student_params: 69.02M
+  max_epochs: 1
+================================================================================
+
+{
+  "timestamp": "2025-12-31T13:06:59.846384",
+  "experiment": "K-only_real_data",
+  "status": "running",
+  "details": {
+    "message": "实验开始训练",
+    "train_samples": 50,
+    "val_samples": 20,
+    "teacher_params": "571.17M",
+    "student_params": "69.02M",
+    "max_epochs": 1
+  }
+}
+================================================================================
+[2025-12-31T13:06:59.846384] K-only_real_data: RUNNING
+  message: 实验开始训练
+  train_samples: 50
+  val_samples: 20
+  teacher_params: 571.17M
+  student_params: 69.02M
+  max_epochs: 1
+================================================================================
+
+{
+  "timestamp": "2025-12-31T13:07:38.432710",
+  "experiment": "K-only_real_data",
+  "status": "running",
+  "details": {
+    "message": "实验开始训练",
+    "train_samples": 50,
+    "val_samples": 20,
+    "teacher_params": "571.17M",
+    "student_params": "69.02M",
+    "max_epochs": 1
+  }
+}
+================================================================================
+[2025-12-31T13:07:38.432710] K-only_real_data: RUNNING
+  message: 实验开始训练
+  train_samples: 50
+  val_samples: 20
+  teacher_params: 571.17M
+  student_params: 69.02M
+  max_epochs: 1
+================================================================================
+
+{
+  "timestamp": "2025-12-31T13:28:23.887253",
+  "experiment": "K-only_real_data",
+  "status": "running",
+  "details": {
+    "message": "实验开始训练",
+    "train_samples": 50,
+    "val_samples": 20,
+    "teacher_params": "571.17M",
+    "student_params": "69.02M",
+    "max_epochs": 1
+  }
+}
+================================================================================
+[2025-12-31T13:28:23.887253] K-only_real_data: RUNNING
+  message: 实验开始训练
+  train_samples: 50
+  val_samples: 20
+  teacher_params: 571.17M
+  student_params: 69.02M
+  max_epochs: 1
+================================================================================
+
+{
+  "timestamp": "2025-12-31T13:28:54.792512",
+  "experiment": "K-only_real_data",
+  "status": "running",
+  "details": {
+    "message": "实验开始训练",
+    "train_samples": 50,
+    "val_samples": 20,
+    "teacher_params": "571.17M",
+    "student_params": "69.02M",
+    "max_epochs": 1
+  }
+}
+================================================================================
+[2025-12-31T13:28:54.792512] K-only_real_data: RUNNING
+  message: 实验开始训练
+  train_samples: 50
+  val_samples: 20
+  teacher_params: 571.17M
+  student_params: 69.02M
+  max_epochs: 1
+================================================================================
+
+{
+  "timestamp": "2025-12-31T13:31:10.296410",
+  "experiment": "K-only_real_data",
+  "status": "running",
+  "details": {
+    "message": "实验开始训练",
+    "train_samples": 50,
+    "val_samples": 20,
+    "teacher_params": "571.17M",
+    "student_params": "69.02M",
+    "max_epochs": 1
+  }
+}
+================================================================================
+[2025-12-31T13:31:10.296410] K-only_real_data: RUNNING
+  message: 实验开始训练
+  train_samples: 50
+  val_samples: 20
+  teacher_params: 571.17M
+  student_params: 69.02M
+  max_epochs: 1
+================================================================================
+
+{
+  "timestamp": "2025-12-31T13:33:27.640720",
+  "experiment": "K-only_real_data",
+  "status": "running",
+  "details": {
+    "message": "实验开始训练",
+    "train_samples": 50,
+    "val_samples": 20,
+    "teacher_params": "571.17M",
+    "student_params": "69.02M",
+    "max_epochs": 1
+  }
+}
+================================================================================
+[2025-12-31T13:33:27.640720] K-only_real_data: RUNNING
+  message: 实验开始训练
+  train_samples: 50
+  val_samples: 20
+  teacher_params: 571.17M
+  student_params: 69.02M
+  max_epochs: 1
+================================================================================
+
+{
+  "timestamp": "2025-12-31T18:43:54.762706",
+  "experiment": "K-only_real_data",
+  "status": "running",
+  "details": {
+    "message": "实验开始训练",
+    "train_samples": 50,
+    "val_samples": 20,
+    "teacher_params": "571.17M",
+    "student_params": "69.02M",
+    "max_epochs": 1
+  }
+}
+================================================================================
+[2025-12-31T18:43:54.762706] K-only_real_data: RUNNING
+  message: 实验开始训练
+  train_samples: 50
+  val_samples: 20
+  teacher_params: 571.17M
+  student_params: 69.02M
+  max_epochs: 1
+================================================================================
+
+{
+  "timestamp": "2025-12-31T18:46:22.459862",
+  "experiment": "K-only_real_data",
+  "status": "running",
+  "details": {
+    "message": "实验开始训练",
+    "train_samples": 50,
+    "val_samples": 20,
+    "teacher_params": "571.17M",
+    "student_params": "69.02M",
+    "max_epochs": 1
+  }
+}
+================================================================================
+[2025-12-31T18:46:22.459862] K-only_real_data: RUNNING
+  message: 实验开始训练
+  train_samples: 50
+  val_samples: 20
+  teacher_params: 571.17M
+  student_params: 69.02M
+  max_epochs: 1
+================================================================================
+
+{
+  "timestamp": "2025-12-31T18:48:51.655553",
+  "experiment": "K-only_real_data",
+  "status": "running",
+  "details": {
+    "message": "实验开始训练",
+    "train_samples": 50,
+    "val_samples": 20,
+    "teacher_params": "571.17M",
+    "student_params": "69.02M",
+    "max_epochs": 1
+  }
+}
+================================================================================
+[2025-12-31T18:48:51.655553] K-only_real_data: RUNNING
+  message: 实验开始训练
+  train_samples: 50
+  val_samples: 20
+  teacher_params: 571.17M
+  student_params: 69.02M
+  max_epochs: 1
+================================================================================
+
